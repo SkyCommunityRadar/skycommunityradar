@@ -1,331 +1,215 @@
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { AnimatePresence, motion } from "motion/react";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import AppShell, { type UiMode, useIsFormation } from "@/components/AppShell";
-import RadarMap, { type MapView } from "@/components/RadarMap";
-import FlightList from "@/components/FlightList";
-import FlightPanel from "@/components/FlightPanel";
-import StripBoard from "@/components/StripBoard";
-import AtcPositionPanel, { useAtcPositions } from "@/components/AtcPositionPanel";
-import TrainingPanel from "@/components/TrainingPanel";
-import { Button } from "@/components/ui/button";
-import { errMsg, useFlight, useFlights, useGround, useNearbyGrounds } from "@/lib/hooks";
-import type { AirportRef, AirspaceResponse, User } from "@/lib/types";
-import { apiGet } from "@/lib/api";
+import { useState } from "react";
+import LangSwitch from "@/components/LangSwitch";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Plane, RadioTower, Lock, Moon, GraduationCap } from "lucide-react";
+import { apiPost, getModeLock } from "@/lib/api";
+import { errMsg, useMe } from "@/lib/hooks";
+import { endSession } from "@/lib/session";
+import type { InactivityStatus, User } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useFlightEditing } from "@/lib/useFlightEditing";
+import { isPhone, PHONE_ATC_MSG, phoneAtcMsg } from "@/lib/device";
 
-import { tr } from "@/lib/i18n";
-type Tab = "vol" | "vols" | "strips" | "atc";
-type Sheet = "min" | "half" | "tall";
+import { locale, tr, trServer } from "@/lib/i18n";
+const ADMIN_MODE_KEY = "sc.admin.uimode";
+type AM = "pilote" | "atc"; // modes soumis à la règle d'inactivité
+type M = AM | "instructeur"; // « instructeur » = profil de formation fictif (instructeurs + admins)
 
-/** Phone / tablet: the panel is a sheet at the bottom of the radar, resized by dragging its handle. */
-const SHEET_H: Record<Sheet, string> = { min: "5.75rem", half: "50%", tall: "calc(100% - 17dvh)" };
-const SHEET_MIN_PX = 92;
+const fmtDay = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
 
-function useIsDesktop(): boolean {
-  const q = "(min-width: 1024px)";
-  const [on, setOn] = useState(() => window.matchMedia(q).matches);
-  useEffect(() => {
-    const m = window.matchMedia(q);
-    const h = () => setOn(m.matches);
-    m.addEventListener("change", h);
-    return () => m.removeEventListener("change", h);
-  }, []);
-  return on;
-}
-
-function RadarView({ user, mode }: { user: User; mode: UiMode }) {
-  const isAtc = mode === "atc";
-  const isFormation = useIsFormation(user);
-  const [panelOpen, setPanelOpen] = useState(true); // computer: the side panel can be hidden
-  const desktop = useIsDesktop();
-  const [sheet, setSheet] = useState<Sheet>("half"); // phone: height of the bottom panel
-  const [dragH, setDragH] = useState<number | null>(null);
-  const drag = useRef<{ y: number; h: number; moved: boolean } | null>(null);
-  const asideRef = useRef<HTMLElement | null>(null);
-  const sheetSnaps = (): [Sheet, number][] => {
-    const parent = asideRef.current?.parentElement?.getBoundingClientRect().height ?? window.innerHeight;
-    return [["min", SHEET_MIN_PX], ["half", parent * 0.5], ["tall", parent - window.innerHeight * 0.17]];
-  };
-  const [params, setParams] = useSearchParams();
-  const selectedId = params.get("f");
-  // a flight given in the address (or clicked on the map) opens its panel directly
-  const [tab, setTab] = useState<Tab>(selectedId ? "vol" : isAtc ? "strips" : "vols");
-  // every layer is always on for everyone (no toggles)
-  const show = { ground: true, fir: true, tracon: true, atc: true };
-  const [view, setView] = useState<MapView | null>(null);
-  // sectors are fetched for a 5°-aligned box: panning inside it reuses the same data (no refetch, no redraw)
-  const Q = 5;
-  const bboxKey = view
-    ? view.bbox.map((v, i) => Math.max(i % 2 ? -180 : -90, Math.min(i % 2 ? 180 : 90, (i < 2 ? Math.floor(v / Q) : Math.ceil(v / Q)) * Q))).join(",")
-    : null;
-  const firQ = useQuery<AirspaceResponse>({
-    queryKey: ["airspaces", "fir", bboxKey],
-    queryFn: () => apiGet<AirspaceResponse>(`/airspaces?kind=fir&bbox=${bboxKey}`),
-    enabled: !!bboxKey && show.fir && (view?.zoom ?? 0) >= 3 && (view?.zoom ?? 0) <= 10,
-    staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
-  });
-  const traconQ = useQuery<AirspaceResponse>({
-    queryKey: ["airspaces", "tracon", bboxKey],
-    queryFn: () => apiGet<AirspaceResponse>(`/airspaces?kind=tracon&bbox=${bboxKey}`),
-    enabled: !!bboxKey && show.tracon && (view?.zoom ?? 0) >= 6 && (view?.zoom ?? 0) <= 12,
-    staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
-  });
-  const atcQ = useAtcPositions();
-  const flights = useFlights("active");
-  const sel = useFlight(selectedId);
-  const [focus, setFocus] = useState<{ c: [number, number]; z: number; k: string } | null>(null);
-  const [apSearch, setApSearch] = useState("");
-
-  // selecting never moves the map: centring is a manual action ("Centrer sur l'avion")
-  const select = (id: string | null) => {
-    setParams(id ? { f: id } : {}, { replace: true });
-    if (id) {
-      setTab("vol");
-      setPanelOpen(true);
-      setSheet((s) => (s === "min" ? "half" : s));
-    } else if (tab === "vol") setTab(isAtc ? "strips" : "vols");
-  };
-  const list = flights.data?.flights ?? [];
-  const selected = sel.data && sel.data.id === selectedId ? sel.data : null;
-  const depGround = useGround(selected?.departure);
-  const arrGround = useGround(selected?.arrival);
-  const ed = useFlightEditing(selected, depGround.data, "view", undefined, arrGround.data);
-  // entering a taxi route / picking a holding point centres the map on the stand
-  useEffect(() => {
-    if (ed.focusAt) setFocus({ c: ed.focusAt, z: 16, k: ed.focusKey });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ed.focusKey]);
-  const [apFoundIcao, setApFoundIcao] = useState<string | null>(null);
-  const apGround = useGround(apFoundIcao);
-  const center: [number, number] | null = view ? [(view.bbox[0] + view.bbox[2]) / 2, (view.bbox[1] + view.bbox[3]) / 2] : null;
-  const nearby = useNearbyGrounds(center, view?.zoom ?? 0);
-  const grounds = [depGround.data, arrGround.data, apGround.data, ...nearby.grounds]
-    .filter((g, i, arr) => !!g && arr.findIndex((x) => x?.icao === g.icao) === i)
-    .map((g) => g!);
-
-  const [apFound, setApFound] = useState<AirportRef | null>(null);
-  const [apError, setApError] = useState<string | null>(null);
-  const searchAirport = async () => {
-    const code = apSearch.trim().toUpperCase();
-    setApError(null);
-    if (!/^[A-Z0-9]{4}$/.test(code)) {
-      setApError(tr("Code OACI sur 4 caractères (ex. LFPG)."));
-      return;
-    }
+/** Suspended for inactivity: explanation + « Demander la réactivation » (sent to the responsables). */
+function Suspended({ mode, st, onSent }: { mode: AM; st: InactivityStatus; onSent: (u: User) => void }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const lead = mode === "atc" ? "Responsable ATC" : "Responsable Pilotes";
+  const send = async () => {
+    setBusy(true);
     try {
-      const ap = await apiGet<AirportRef>(`/airports/lookup/${code}`);
-      setApFound(ap);
-      setApFoundIcao(ap.icao);
-      setFocus({ c: [ap.lat, ap.lon], z: 14, k: `ap-${ap.icao}-${Date.now()}` });
-      window.setTimeout(() => {
-        setApFound((cur) => (cur && cur.icao === ap.icao ? null : cur));
-        setApFoundIcao((cur) => (cur === ap.icao ? null : cur));
-      }, 30_000);
+      await apiPost(`/activity/me/${mode}/request`, msg.trim() ? { message: msg.trim() } : {});
+      toast.success(tr("Demande envoyée au {0}", [lead]));
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      const u = qc.getQueryData<User>(["me"]);
+      if (u) onSent(u);
     } catch (e) {
-      setApFound(null);
-      setApError(errMsg(e));
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
     }
   };
-
-  const tabs: { k: Tab; label: string }[] = [
-    ...(selected ? [{ k: "vol" as const, label: selected.callsign }] : []),
-    ...(isAtc ? [{ k: "strips" as const, label: tr("Strips") }] : []),
-    { k: "vols", label: tr("Vols actifs ({0})", [list.length]) },
-    { k: "atc", label: tr("Fréquences ({0})", [atcQ.data?.length ?? 0]) },
-  ];
-  const activeTab = tab === "vol" && !selected ? (isAtc ? "strips" : "vols") : tab;
-
   return (
-    <div className="flex h-full flex-col lg:flex-row">
-      <section className="relative min-h-[16dvh] flex-1 bg-radar">
-        <RadarMap
-          flights={list}
-          selectedId={selectedId}
-          onSelect={(id) => select(id)}
-          route={selected?.route}
-          flownIndex={selected?.position.track === "air" ? selected.position.wp_index : undefined}
-          aircraftPos={selected?.position.track === "air" && !selected.vector ? (selected.holding?.entered ? (selected.holding.path[0] as [number, number]) : [selected.position.lat, selected.position.lon]) : undefined}
-          vectors={list.filter((fl) => (fl.id === selected?.id ? selected.vector : fl.vector)).map((fl) => {
-            const v = (fl.id === selected?.id ? selected!.vector : fl.vector)!;
-            return { id: fl.id, path: v.path, label: v.label, selected: fl.id === selectedId };
-          })}
-          holdPath={selected?.holding?.path}
-          lineupPath={selected?.lineup ?? undefined}
-          firs={show.fir && (view?.zoom ?? 0) <= 10 ? firQ.data?.features : undefined}
-          tracons={show.tracon && (view?.zoom ?? 0) >= 6 && (view?.zoom ?? 0) <= 12 ? traconQ.data?.features : undefined}
-          atc={show.atc ? atcQ.data : undefined}
-          showGround={show.ground}
-          onViewChange={setView}
-          taxis={selected ? ed.taxis : []}
-          grounds={grounds}
-          highlightGates={ed.gateHighlight ?? (selected ? [selected.dep_gate?.ref, selected.arr_gate?.ref].filter((r): r is string => !!r) : undefined)}
-          draftPoints={ed.draftPoints}
-          onMapClick={ed.onMapClick}
-          onHoldingClick={ed.onHoldingClick}
-          onTaxiwayClick={ed.onTaxiwayClick}
-          onGateClick={ed.onGateClick}
-          selectedHolding={ed.editingKind === "taxi_out" || ed.mode === "reject_hold" ? ed.destination : selected?.holding_point}
-          crosshair={ed.crosshair}
-          pushHint={ed.pushHint}
-          center={focus?.c}
-          zoom={focus?.z}
-          focusKey={focus?.k}
-        />
-        <button
-          className="absolute right-3 top-3 z-[600] hidden h-10 items-center gap-1.5 rounded-lg lg:flex border border-border bg-background/90 px-3 text-sm text-muted-foreground backdrop-blur transition-colors duration-150 hover:bg-secondary hover:text-[color:var(--sc-accent)]"
-          onClick={() => setPanelOpen((o) => !o)}
-          title={panelOpen ? tr("Masquer le panneau") : tr("Afficher le panneau")}
-          data-testid="toggle-right-panel"
-        >
-          {panelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-          <span className="hidden lg:inline">{panelOpen ? tr("Masquer") : tr("Panneau")}</span>
-        </button>
-        {(firQ.isError || traconQ.isError) && (
-          <p className="absolute right-3 top-16 z-[600] rounded-lg border border-red-500/40 bg-background/90 px-2.5 py-1.5 text-xs text-red-300" data-testid="airspace-error">{tr("Espaces aériens indisponibles.")}</p>
-        )}
-        <div className="absolute left-14 top-3 z-[500] flex gap-1.5 rounded-lg border border-border bg-background/90 p-1.5 backdrop-blur">
+    <div className="mt-3 space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs" data-testid={`mode-${mode}-suspended`}>
+      <p className="font-semibold text-amber-200">{tr("Accès suspendu pour inactivité")}</p>
+      <p className="text-amber-100/90">{trServer(st.reason ?? "")}</p>
+      {st.request_at ? (
+        <p className="text-emerald-300" data-testid={`mode-${mode}-request-sent`}>{tr("Demande de réactivation envoyée le {0} : le {1} va la traiter.", [fmtDay(st.request_at), lead])}</p>
+      ) : (
+        <>
           <input
-            value={apSearch}
-            onChange={(e) => setApSearch(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && searchAirport()}
-            placeholder={tr("Aéroport OACI")}
-            maxLength={4}
-            className="w-32 bg-transparent px-2 font-mono text-sm uppercase outline-none"
-            data-testid="map-airport-search-input"
+            value={msg}
+            onChange={(e) => setMsg(e.target.value)}
+            maxLength={300}
+            placeholder={tr("Un petit mot pour le responsable (facultatif)")}
+            className="w-full rounded border border-border bg-background/70 px-2 py-1.5 text-xs outline-none focus:border-[color:var(--sc-accent)]"
+            data-testid={`mode-${mode}-request-message`}
           />
-          <Button size="sm" variant="secondary" onClick={searchAirport} data-testid="map-airport-search-button">{tr("Aller")}</Button>
-        </div>
-        {selected && ed.banner && (
-          <div className="absolute left-1/2 top-16 z-[600] -translate-x-1/2 rounded-lg border border-[color:var(--sc-accent)]/50 bg-background/90 px-3 py-1.5 text-xs text-[color:var(--sc-accent-soft)] backdrop-blur" data-testid="map-mode-banner">
-            {ed.banner}
-          </div>
-        )}
-        {nearby.loading.length > 0 && (
-          <div className="absolute bottom-6 left-1/2 z-[500] -translate-x-1/2 rounded-lg border border-[color:var(--sc-accent)]/40 bg-background/90 px-3 py-1.5 text-xs text-[color:var(--sc-accent-soft)] backdrop-blur" data-testid="ground-loading">{tr("Chargement du plan de {0} (OpenStreetMap)…", [nearby.loading.join(", ")])}</div>
-        )}
-        {(apFound || apError) && (
-          <div
-            className={`absolute left-14 top-16 z-[500] max-w-xs rounded-lg border bg-background/90 px-3 py-2 text-xs backdrop-blur ${apError ? "border-red-500/50 text-red-300" : "border-border text-foreground"}`}
-            data-testid="map-airport-search-result"
+          <button
+            onClick={send}
+            disabled={busy}
+            className="rounded-md bg-amber-500 px-3 py-1.5 font-semibold text-black transition-colors hover:bg-amber-400 disabled:opacity-60"
+            data-testid={`mode-${mode}-request`}
           >
-            {apError ?? (
-              <>
-                <span className="font-mono font-semibold text-[color:var(--sc-accent)]">{apFound!.icao}</span> {apFound!.name}
-              </>
-            )}
-          </div>
-        )}
-      </section>
-      <AnimatePresence initial={false}>
-        {(panelOpen || !desktop) && (
-          <motion.aside
-            key="panel"
-            ref={asideRef}
-            style={desktop ? undefined : { height: dragH ?? SHEET_H[sheet] }}
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: "auto", opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-            className={cn(
-              "flex shrink-0 flex-col overflow-hidden border-t border-border bg-card lg:border-l lg:border-t-0",
-              !desktop && dragH === null && "transition-[height] duration-300 ease-out",
-            )}
-            data-testid="radar-right-panel"
-          >
-            <div className="theme-stripe" aria-hidden />
-            {/* drag the handle up or down (or tap it) to resize the panel over the map */}
-            <div
-              role="button"
-              tabIndex={0}
-              className="flex h-8 w-full shrink-0 cursor-grab touch-none select-none items-center justify-center active:cursor-grabbing lg:hidden"
-              aria-label={tr("Faire glisser pour agrandir ou réduire le panneau")}
-              onPointerDown={(e) => {
-                const el = asideRef.current;
-                if (!el) return;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                drag.current = { y: e.clientY, h: el.getBoundingClientRect().height, moved: false };
-              }}
-              onPointerMove={(e) => {
-                const d = drag.current;
-                if (!d) return;
-                if (Math.abs(d.y - e.clientY) > 6) d.moved = true;
-                if (d.moved) setDragH(Math.max(SHEET_MIN_PX, Math.min(sheetSnaps()[2][1], d.h + d.y - e.clientY)));
-              }}
-              onPointerUp={(e) => {
-                const d = drag.current;
-                drag.current = null;
-                if (!d) return;
-                if (!d.moved) setSheet((s) => (s === "half" ? "tall" : "half"));
-                else {
-                  const h = d.h + d.y - e.clientY;
-                  setSheet(sheetSnaps().reduce((a, b) => (Math.abs(b[1] - h) < Math.abs(a[1] - h) ? b : a))[0]);
-                }
-                setDragH(null);
-              }}
-              onPointerCancel={() => { drag.current = null; setDragH(null); }}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setSheet((s) => (s === "half" ? "tall" : "half"))}
-              data-testid="radar-panel-resize"
-            >
-              <span className="h-1.5 w-12 rounded-full bg-muted-foreground/45" />
-            </div>
-            <div className="no-scrollbar flex w-full shrink-0 overflow-x-auto border-b border-border lg:w-[26rem]" role="tablist">
-              {tabs.map(({ k, label }) => (
-                <button
-                  key={k}
-                  role="tab"
-                  aria-selected={activeTab === k}
-                  onClick={() => { setTab(k); setSheet((s) => (s === "min" ? "half" : s)); }}
-                  className={cn(
-                    "flex-1 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-[13px] font-medium transition-[color,border-color] duration-150 sm:px-3 sm:py-3 sm:text-sm",
-                    activeTab === k ? "border-[color:var(--sc-accent)] text-[color:var(--sc-accent)]" : "border-transparent text-muted-foreground hover:text-foreground",
-                  )}
-                  data-testid={`radar-tab-${k}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="min-h-0 w-full flex-1 overflow-y-auto lg:w-[26rem]">
-              <AnimatePresence mode="wait">
-                <motion.div key={activeTab + (activeTab === "vol" ? selected?.id ?? "" : "")} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="h-full">
-                  {activeTab === "vol" && selected ? (
-                    <FlightPanel
-                      flight={selected}
-                      ed={ed}
-                      onClose={() => select(null)}
-                      onCenter={() => setFocus({ c: [selected.position.lat, selected.position.lon], z: selected.position.on_ground ? 15 : 8, k: `fl-${Date.now()}` })}
-                    />
-                  ) : activeTab === "strips" && isAtc ? (
-                    <StripBoard selectedId={selectedId} onSelect={(id) => select(id)} myAirport={atcQ.data?.find((p) => p.controller === user.display_name)?.airport ?? null} />
-                  ) : activeTab === "atc" ? (
-                    <div className="space-y-5 p-4">
-                      {isFormation && <TrainingPanel />}
-                      <AtcPositionPanel user={user} canOpen={isAtc && !isFormation} />
-                    </div>
-                  ) : (
-                    <FlightList flights={list} selectedId={selectedId} onSelect={(id) => select(id)} loading={flights.isLoading} error={flights.isError} />
-                  )}
-                </motion.div>
-              </AnimatePresence>
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
+            {busy ? tr("Envoi…") : tr("Demander la réactivation")}
+          </button>
+        </>
+      )}
     </div>
   );
 }
 
-function RadarWithFormation({ user, mode }: { user: User; mode: UiMode }) {
-  const isFormation = useIsFormation(user);
-  return <RadarView key={`${mode}-${isFormation ? "f" : "n"}`} user={user} mode={mode} />;
-}
+/** After login: choose Pilote or ATC. A mode the member has no Discord role for stays visible but locked,
+ * and a mode suspended for inactivity explains why and lets the member ask for its reactivation. */
+export default function Mode() {
+  const me = useMe();
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [busy, setBusy] = useState<string | null>(null);
+  const from = (loc.state as { from?: string } | null)?.from;
+  // vol actif -> pas d'ATC ; position ATC ouverte -> pas de Pilote (règle appliquée aussi côté serveur)
+  const lockQ = useQuery({ queryKey: ["mode-lock"], queryFn: getModeLock, enabled: !!me.data, staleTime: 0 });
+  const target = from && from !== "/mode" ? from : "/";
 
-export default function Radar() {
-  return <AppShell>{(u, mode) => <RadarWithFormation user={u} mode={mode} />}</AppShell>;
+  if (me.isError) return <Navigate to="/login" replace />;
+  if (!me.data) return <div className="p-8 font-mono text-sm text-muted-foreground">{tr("Chargement…")}</div>;
+  const u = me.data;
+  const isAdmin = u.role === "admin";
+  const phone = isPhone();
+
+  async function choose(mode: M) {
+    if (mode !== "pilote" && isPhone()) {
+      toast.error(phoneAtcMsg());
+      return;
+    }
+    try {
+      const reason = mode === "instructeur" ? null : (await getModeLock())[mode];
+      if (reason) {
+        toast.error(trServer(reason));
+        return;
+      }
+    } catch {
+      /* le serveur refusera de toute façon si le mode est verrouillé */
+    }
+    if (isAdmin) {
+      // administrators keep every right: the mode is only how the site is laid out for them
+      localStorage.setItem(ADMIN_MODE_KEY, mode);
+      window.dispatchEvent(new Event("sc-mode"));
+      nav(target, { replace: true });
+      return;
+    }
+    setBusy(mode);
+    try {
+      const user = await apiPost<User>("/auth/mode", { mode });
+      qc.clear();
+      qc.setQueryData(["me"], user);
+      toast.success(mode === "atc" ? tr("Mode ATC activé") : mode === "instructeur" ? tr("Mode formation activé") : tr("Mode Pilote activé"));
+      nav(target, { replace: true });
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const cards: { mode: M; title: string; icon: typeof Plane; text: string }[] = [
+    {
+      mode: "pilote" as const,
+      title: tr("Pilote"),
+      icon: Plane,
+      text: tr("Volez sur le réseau SkyCommunity : déposez votre plan de vol SimBrief, suivez votre avion sur le radar et soyez guidé par les contrôleurs."),
+    },
+    {
+      mode: "atc" as const,
+      title: "ATC",
+      icon: RadioTower,
+      text: tr("Contrôlez le trafic : ouvrez votre position (sol, tour, approche ou centre) et gérez les vols de votre zone en direct sur le radar."),
+    },
+    // profil fictif : visible des instructeurs (rôle Discord) ET des admins
+    ...(isAdmin || u.access.instructor
+      ? [{
+          mode: "instructeur" as const,
+          title: tr("Pilote ATC (formation)"),
+          icon: GraduationCap,
+          text: tr("Profil fictif pour former les contrôleurs : positions d'entraînement et ATIS, sans aucune ouverture sur Discord ni impact sur le trafic réel."),
+        }]
+      : []),
+  ];
+
+  return (
+    <div className="relative flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_30%_20%,var(--sc-glow)_0%,var(--sc-topbar)_55%)] p-6">
+      <LangSwitch className="absolute right-4 top-4" />
+      <div className="w-full max-w-3xl space-y-8">
+        <div className="flex items-center gap-3">
+          <img src="/logo.png" alt={tr("SkyCommunity")} className="h-12 w-12 shrink-0 rounded-full bg-white ring-2 ring-[color:var(--sc-accent)]/40" />
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="mode-title">{tr("Bonjour {0}, quel poste aujourd'hui ?", [u.display_name])}</h1>
+            <p className="text-sm text-muted-foreground">{tr("Vous pourrez changer de mode à tout moment depuis l'en-tête.")}</p>
+          </div>
+        </div>
+        <div className={cn("grid gap-5", cards.length > 2 ? "md:grid-cols-3" : "md:grid-cols-2")}>
+          {cards.map(({ mode, title, icon: Icon, text }) => {
+            const noRole = !isAdmin && !(mode === "instructeur" ? u.access.instructor : u.access[mode]);
+            const st = mode === "instructeur" ? undefined : u.inactivity?.[mode];
+            const suspended = !isAdmin && !noRole && st?.state === "suspendu";
+            const phoneLock = mode !== "pilote" && phone ? PHONE_ATC_MSG : null; // also checked by the server
+            const busyReason = !noRole && !suspended ? phoneLock ?? (mode === "instructeur" ? null : lockQ.data?.[mode]) ?? null : null;
+            const locked = noRole || suspended || !!busyReason;
+            return (
+              <div
+                key={mode}
+                role={locked ? undefined : "button"}
+                tabIndex={locked ? -1 : 0}
+                onClick={() => !locked && !busy && choose(mode)}
+                onKeyDown={(e) => !locked && !busy && (e.key === "Enter" || e.key === " ") && choose(mode)}
+                aria-disabled={locked}
+                data-testid={`mode-${mode}-button`}
+                className={cn(
+                  "group relative overflow-hidden rounded-xl border p-6 text-left transition-[transform,border-color,box-shadow] duration-200",
+                  locked
+                    ? "cursor-not-allowed border-border bg-card/60"
+                    : "cursor-pointer border-[color:var(--sc-primary)]/50 bg-card hover:-translate-y-1 hover:border-[color:var(--sc-accent)] hover:shadow-[0_12px_40px_-12px_var(--sc-primary)]",
+                )}
+              >
+                <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[color:var(--sc-primary)]/15 blur-2xl" />
+                <div className={cn(locked && "opacity-55")}>
+                  <Icon className="h-9 w-9 text-[color:var(--sc-accent)]" />
+                  <div className="mt-4 flex items-center gap-2 text-xl font-semibold">
+                    {title} {noRole && <Lock className="h-4 w-4 text-muted-foreground" />}
+                    {suspended && <Moon className="h-4 w-4 text-amber-300" />}
+                    {busyReason && <Lock className="h-4 w-4 text-amber-300" />}
+                  </div>
+                  <p className="mt-1.5 text-sm text-muted-foreground">{text}</p>
+                </div>
+                {noRole && (
+                  <div className="mt-3 rounded-lg border border-border bg-background/50 p-3 text-xs" data-testid={`mode-${mode}-locked`}>
+                    <p className="font-semibold text-foreground">{tr("Vous n'avez pas accès au mode {0}.", [title])}</p>
+                    <p className="mt-0.5 text-muted-foreground">{tr("Il faut le rôle {0} sur le serveur Discord SkyCommunity.", [title])}</p>
+                  </div>
+                )}
+                {busyReason && (
+                  <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs" data-testid={`mode-${mode}-busy`}>
+                    <p className="text-amber-100/90">{trServer(busyReason)}</p>
+                  </div>
+                )}
+                {suspended && st && mode !== "instructeur" && <Suspended mode={mode} st={st} onSent={(nu) => qc.setQueryData(["me"], nu)} />}
+                {busy === mode && <p className="mt-3 text-xs text-[color:var(--sc-accent)]">{tr("Activation…")}</p>}
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={() => endSession()} className="text-xs text-muted-foreground hover:text-foreground" data-testid="mode-logout">{tr("Se déconnecter")}</button>
+      </div>
+    </div>
+  );
 }
