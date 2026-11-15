@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, model_validator, Field
 
-Role = Literal["pilote", "atc", "instructeur", "admin", "aucun"]  # "aucun" = logged in, mode not chosen yet
+Role = Literal["pilote", "atc", "instructeur", "formation_pilote", "admin", "aucun"]  # "aucun" = logged in, mode not chosen yet
 
 
 # ---------- auth / users ----------

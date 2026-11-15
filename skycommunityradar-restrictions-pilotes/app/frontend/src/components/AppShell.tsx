@@ -68,6 +68,7 @@ export function useUiMode(user: User | undefined): UiMode {
   if (!user) return "pilote";
   // Formation ATC → layout ATC ; formation_pilote is already role "pilote"
   if (user.role === "instructeur") return "atc";
+  if (user.role === "formation_pilote") return "pilote";
   if (user.role === "admin") {
     if (isPhone()) return "pilote";
     return adminMode === "atc" || adminMode === "pilote" ? adminMode : "atc";
@@ -92,6 +93,7 @@ function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
   // Highlight: formation ATC, formation pilote (role pilote + came from training — we only know instructeur for sure), or normal mode
   const current: UiMode | TrainMode =
     user.role === "instructeur" ? "instructeur"
+    : user.role === "formation_pilote" ? "formation_pilote"
     : mode;
   const pick = async (m: UiMode | TrainMode) => {
     if (busy) return;
@@ -463,10 +465,15 @@ function navItems(user: User, mode: UiMode) {
           { to: "/profile", label: tr("Profil"), icon: UserRound, id: "profile" },
         ];
   if (isLead(user)) items.push({ to: "/suivi", label: tr("Suivi des membres"), icon: Activity, id: "suivi" });
-  return user.role === "admin" ? [...items, { to: "/admin", label: tr("Administration"), icon: ShieldCheck, id: "admin" }] : items;
+  if (user.role === "admin") items.push({ to: "/admin", label: tr("Administration"), icon: ShieldCheck, id: "admin" });
+  return items;
 }
 
-const isLead = (u: User) => u.access.admin || u.access.pilot_lead || u.access.atc_lead;
+/** Lead / admin tools: never in formation profiles (even if Discord access.admin is still true). */
+const isLead = (u: User) => {
+  if (u.role === "instructeur" || u.role === "formation_pilote") return false;
+  return u.role === "admin" || u.access.pilot_lead || u.access.atc_lead;
+};
 
 /** Reactivation requests waiting for this responsable (menu badge). */
 function useActivityPending(user: User) {

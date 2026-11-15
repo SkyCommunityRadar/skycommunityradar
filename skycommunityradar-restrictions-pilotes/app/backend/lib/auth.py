@@ -24,6 +24,8 @@ SESSION_DAYS = 7
 PERMS: dict[str, set[str]] = {
     "aucun": set(),  # logged in but no mode chosen yet -> only /auth endpoints
     "pilote": {"flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note", "review:write", "planning:read"},
+    # Formation pilote : mêmes droits qu'un pilote, sans admin / lead / suivi
+    "formation_pilote": {"flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note", "review:write", "planning:read"},
     "atc": {"flight:read", "flight:act", "flight:taxi", "flight:gates", "flight:note", "flight:control", "strip:read", "strip:write", "atc:position", "review:write", "history:read", "planning:read", "planning:write"},
     # Profil de formation (instructeurs) : FICTIF. Lecture seule du trafic + positions d'entraînement isolées
     # (collection atc_training_positions). Aucune action sur un vol réel, aucun envoi au bot Discord.
@@ -61,7 +63,7 @@ def effective_role(user: dict, mode: str | None) -> str:
     if mode == "instructeur" and can_train:
         return "instructeur"
     if mode == "formation_pilote" and can_train:
-        return "pilote"
+        return "formation_pilote"
     if a["admin"]:
         return "admin"
     suspended = user.get("suspended") or ()  # access suspended for inactivity (lib/activity), set by current_user

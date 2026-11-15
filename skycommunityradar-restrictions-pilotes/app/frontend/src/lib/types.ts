@@ -1,5 +1,5 @@
 // Hand-written mirrors of backend/models/schemas.py — keep in sync.
-export type Role = "pilote" | "atc" | "instructeur" | "admin" | "aucun"; // "aucun" = mode not chosen yet
+export type Role = "pilote" | "atc" | "instructeur" | "formation_pilote" | "admin" | "aucun"; // "aucun" = mode not chosen yet
 
 export interface User {
   id: string;
