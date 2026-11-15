@@ -29,8 +29,8 @@ POS_FR = {"APP": "Approche", "TWR": "Tour", "GND": "Sol", "CTR": "Centre"}
 
 
 def _out(d: dict) -> AtcPosition:
-    return AtcPosition(**{k: d.get(k) for k in AtcPosition.model_fields if k not in ("opened_at", "last_seen")},
-                       opened_at=aware(d["opened_at"]), last_seen=aware(d["last_seen"]))
+    return AtcPosition(**{k: d.get(k) for k in AtcPosition.model_fields if k not in ("opened_at", "last_seen", "training")},
+                       opened_at=aware(d["opened_at"]), last_seen=aware(d["last_seen"]), training=False)  # position réelle : jamais fictive
 
 
 async def heartbeat(user: dict, now) -> None:
@@ -211,7 +211,7 @@ async def atis_for_controller(user: dict = Depends(require("flight:read"))):
     """ATIS des aéroports où l'utilisateur contrôle actuellement (bandeau SkyRadar)."""
     from lib.atis_letter import build_atis
     docs = await db.atc_positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(20)
-    if user.get("role") == "instructeur":  # profil de formation : ses positions fictives comptent aussi
+    if user.get("role") in ("instructeur", "admin"):  # profil de formation (instructeur ou admin) : ses positions fictives comptent aussi
         docs += await db.atc_training_positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(20)
     icaos = []
     for d in docs:

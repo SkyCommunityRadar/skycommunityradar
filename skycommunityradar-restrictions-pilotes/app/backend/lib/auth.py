@@ -29,7 +29,7 @@ PERMS: dict[str, set[str]] = {
     # (collection atc_training_positions). Aucune action sur un vol réel, aucun envoi au bot Discord.
     "instructeur": {"flight:read", "strip:read", "history:read", "planning:read", "training:position"},
     "admin": {"flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note",
-              "flight:control", "strip:read", "strip:write", "atc:position", "review:write", "history:read", "admin:reviews", "admin:users", "admin:flights", "admin:airports", "admin:log", "planning:read", "planning:write"},
+              "flight:control", "strip:read", "strip:write", "atc:position", "review:write", "history:read", "admin:reviews", "admin:users", "admin:flights", "admin:airports", "admin:log", "planning:read", "planning:write", "training:position"},
 }
 # For these permissions a pilot may only act on flights they own.
 OWNER_SCOPED = {"flight:act", "flight:gates", "flight:note"}
