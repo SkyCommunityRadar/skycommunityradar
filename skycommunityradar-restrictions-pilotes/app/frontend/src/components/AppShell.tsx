@@ -55,17 +55,38 @@ function UtcClock() {
 }
 
 export type UiMode = "pilote" | "atc";
+/** Admin can also pick "instructeur" as a local UI preference (formation / training positions). */
+export type AdminUiMode = UiMode | "instructeur";
+
 /** UI mode: the session mode for members; a local display preference for the admin (who keeps all rights). */
 export function useUiMode(user: User | undefined): UiMode {
-  const [adminMode, setAdminMode] = useState<UiMode>(() => (localStorage.getItem(ADMIN_MODE_KEY) as UiMode) || "atc");
+  const [adminMode, setAdminMode] = useState<AdminUiMode>(() => (localStorage.getItem(ADMIN_MODE_KEY) as AdminUiMode) || "atc");
   useEffect(() => {
-    const h = () => setAdminMode((localStorage.getItem(ADMIN_MODE_KEY) as UiMode) || "atc");
+    const h = () => setAdminMode((localStorage.getItem(ADMIN_MODE_KEY) as AdminUiMode) || "atc");
     window.addEventListener("sc-mode", h);
     return () => window.removeEventListener("sc-mode", h);
   }, []);
   if (!user) return "pilote";
-  if (user.role === "admin") return isPhone() ? "pilote" : adminMode; // no ATC layout on a phone
+  if (user.role === "admin") {
+    if (isPhone()) return "pilote"; // no ATC layout on a phone
+    // "instructeur" uses the same ATC layout; the formation panel is shown via useIsFormation()
+    return adminMode === "instructeur" ? "atc" : adminMode;
+  }
   return user.role === "atc" || user.role === "instructeur" ? "atc" : "pilote"; // l'instructeur utilise la mise en page ATC
+}
+
+/** True when the current user is in formation mode (real instructeur role, or admin who selected Formation). */
+export function useIsFormation(user: User | undefined): boolean {
+  const [adminMode, setAdminMode] = useState<AdminUiMode>(() => (localStorage.getItem(ADMIN_MODE_KEY) as AdminUiMode) || "atc");
+  useEffect(() => {
+    const h = () => setAdminMode((localStorage.getItem(ADMIN_MODE_KEY) as AdminUiMode) || "atc");
+    window.addEventListener("sc-mode", h);
+    return () => window.removeEventListener("sc-mode", h);
+  }, []);
+  if (!user) return false;
+  if (user.role === "instructeur") return true;
+  if (user.role === "admin") return adminMode === "instructeur";
+  return false;
 }
 
 function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
@@ -75,13 +96,27 @@ function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
   const suspended = (m: UiMode) => user.role !== "admin" && user.inactivity?.[m]?.state === "suspendu";
   const canAtc = user.role === "admin" || (user.access.atc && !suspended("atc"));
   const canPilot = user.role === "admin" || (user.access.pilote && !suspended("pilote"));
-  const canTrain = user.access.instructor && user.role !== "admin";
-  const current: UiMode | "instructeur" = user.role === "instructeur" ? "instructeur" : mode;
+  // Admins always get Formation; others need the Discord Instructeur role
+  const canTrain = user.role === "admin" || !!user.access.instructor;
+  // Current selection: real instructeur role, or admin local preference "instructeur"
+  const adminStored = (typeof localStorage !== "undefined" ? localStorage.getItem(ADMIN_MODE_KEY) : null) as AdminUiMode | null;
+  const current: UiMode | "instructeur" =
+    user.role === "instructeur" ? "instructeur"
+    : user.role === "admin" && adminStored === "instructeur" ? "instructeur"
+    : mode;
   const pick = async (m: UiMode | "instructeur") => {
     if (m === current || busy) return;
     if (m === "instructeur") {
       if (isPhone()) {
         toast.error(phoneAtcMsg());
+        return;
+      }
+      // Admin: pure local preference (no backend mode change — admins keep all rights)
+      if (user.role === "admin") {
+        localStorage.setItem(ADMIN_MODE_KEY, "instructeur");
+        window.dispatchEvent(new Event("sc-mode"));
+        toast.success(tr("Mode formation activé"));
+        nav("/");
         return;
       }
       setBusy(true);

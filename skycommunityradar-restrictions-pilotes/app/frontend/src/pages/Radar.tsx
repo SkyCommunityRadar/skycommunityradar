@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import AppShell, { type UiMode } from "@/components/AppShell";
+import AppShell, { type UiMode, useIsFormation } from "@/components/AppShell";
 import RadarMap, { type MapView } from "@/components/RadarMap";
 import FlightList from "@/components/FlightList";
 import FlightPanel from "@/components/FlightPanel";
@@ -39,6 +39,7 @@ function useIsDesktop(): boolean {
 
 function RadarView({ user, mode }: { user: User; mode: UiMode }) {
   const isAtc = mode === "atc";
+  const isFormation = useIsFormation(user);
   const [panelOpen, setPanelOpen] = useState(true); // computer: the side panel can be hidden
   const desktop = useIsDesktop();
   const [sheet, setSheet] = useState<Sheet>("half"); // phone: height of the bottom panel
@@ -304,8 +305,8 @@ function RadarView({ user, mode }: { user: User; mode: UiMode }) {
                     <StripBoard selectedId={selectedId} onSelect={(id) => select(id)} myAirport={atcQ.data?.find((p) => p.controller === user.display_name)?.airport ?? null} />
                   ) : activeTab === "atc" ? (
                     <div className="space-y-5 p-4">
-                      {user.role === "instructeur" && <TrainingPanel />}
-                      <AtcPositionPanel user={user} canOpen={isAtc} />
+                      {isFormation && <TrainingPanel />}
+                      <AtcPositionPanel user={user} canOpen={isAtc && !isFormation} />
                     </div>
                   ) : (
                     <FlightList flights={list} selectedId={selectedId} onSelect={(id) => select(id)} loading={flights.isLoading} error={flights.isError} />
@@ -320,6 +321,11 @@ function RadarView({ user, mode }: { user: User; mode: UiMode }) {
   );
 }
 
+function RadarWithFormation({ user, mode }: { user: User; mode: UiMode }) {
+  const isFormation = useIsFormation(user);
+  return <RadarView key={`${mode}-${isFormation ? "f" : "n"}`} user={user} mode={mode} />;
+}
+
 export default function Radar() {
-  return <AppShell>{(u, mode) => <RadarView key={mode} user={u} mode={mode} />}</AppShell>;
+  return <AppShell>{(u, mode) => <RadarWithFormation user={u} mode={mode} />}</AppShell>;
 }
