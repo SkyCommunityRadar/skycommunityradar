@@ -14,7 +14,7 @@ import { isPhone, PHONE_ATC_MSG, phoneAtcMsg } from "@/lib/device";
 import { locale, tr, trServer } from "@/lib/i18n";
 const ADMIN_MODE_KEY = "sc.admin.uimode";
 type AM = "pilote" | "atc"; // modes soumis à la règle d'inactivité
-type M = AM | "instructeur"; // « instructeur » = profil de formation fictif (réservé aux instructeurs)
+type M = AM | "instructeur"; // « instructeur » = profil de formation fictif (instructeurs + admins)
 
 const fmtDay = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
 
@@ -135,8 +135,8 @@ export default function Mode() {
       icon: RadioTower,
       text: tr("Contrôlez le trafic : ouvrez votre position (sol, tour, approche ou centre) et gérez les vols de votre zone en direct sur le radar."),
     },
-    // profil fictif : visible uniquement des instructeurs (rôle Discord Instructeur), jamais relié au bot Discord
-    ...(!isAdmin && u.access.instructor
+    // profil fictif : visible des instructeurs (rôle Discord) ET des admins
+    ...(isAdmin || u.access.instructor
       ? [{
           mode: "instructeur" as const,
           title: tr("Pilote ATC (formation)"),
