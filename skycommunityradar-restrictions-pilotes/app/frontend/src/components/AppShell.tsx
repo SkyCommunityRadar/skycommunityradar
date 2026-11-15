@@ -105,7 +105,8 @@ function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
     : user.role === "admin" && adminStored === "instructeur" ? "instructeur"
     : mode;
   const pick = async (m: UiMode | "instructeur") => {
-    if (m === current || busy) return;
+    if (busy) return;
+    if (m === current && m !== "instructeur") return; // allow re-clicking Formation to re-apply
     if (m === "instructeur") {
       if (isPhone()) {
         toast.error(phoneAtcMsg());
@@ -116,7 +117,7 @@ function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
         localStorage.setItem(ADMIN_MODE_KEY, "instructeur");
         window.dispatchEvent(new Event("sc-mode"));
         toast.success(tr("Mode formation activé"));
-        nav("/");
+        nav("/", { replace: true });
         return;
       }
       setBusy(true);
