@@ -62,7 +62,7 @@ class NudgeIn(BaseModel):
 
 
 class ModeIn(BaseModel):
-    mode: Literal["pilote", "atc", "instructeur"]
+    mode: Literal["pilote", "atc", "instructeur", "formation_pilote"]
 
 
 class NavIn(BaseModel):

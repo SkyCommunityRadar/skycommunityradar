@@ -14,7 +14,7 @@ import { isPhone, PHONE_ATC_MSG, phoneAtcMsg } from "@/lib/device";
 import { locale, tr, trServer } from "@/lib/i18n";
 const ADMIN_MODE_KEY = "sc.admin.uimode";
 type AM = "pilote" | "atc"; // modes soumis à la règle d'inactivité
-type M = AM | "instructeur"; // « instructeur » = profil de formation fictif (instructeurs + admins)
+type M = AM | "instructeur" | "formation_pilote"; // formation = profils d'entraînement (instructeurs + admins)
 
 const fmtDay = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
 
@@ -84,16 +84,18 @@ export default function Mode() {
   if (me.isError) return <Navigate to="/login" replace />;
   if (!me.data) return <div className="p-8 font-mono text-sm text-muted-foreground">{tr("Chargement…")}</div>;
   const u = me.data;
-  const isAdmin = u.role === "admin";
+  const isAdmin = u.access.admin || u.role === "admin";
+  const canTrain = isAdmin || u.access.instructor;
   const phone = isPhone();
 
   async function choose(mode: M) {
-    if (mode !== "pilote" && isPhone()) {
+    if (mode !== "pilote" && mode !== "formation_pilote" && isPhone()) {
       toast.error(phoneAtcMsg());
       return;
     }
     try {
-      const reason = mode === "instructeur" ? null : (await getModeLock())[mode];
+      // formation modes are never mode-locked; normal pilote/atc still are
+      const reason = mode === "instructeur" || mode === "formation_pilote" ? null : (await getModeLock())[mode as AM];
       if (reason) {
         toast.error(trServer(reason));
         return;
@@ -101,19 +103,26 @@ export default function Mode() {
     } catch {
       /* le serveur refusera de toute façon si le mode est verrouillé */
     }
-    if (isAdmin) {
-      // administrators keep every right: the mode is only how the site is laid out for them
-      localStorage.setItem(ADMIN_MODE_KEY, mode);
-      window.dispatchEvent(new Event("sc-mode"));
-      nav(target, { replace: true });
-      return;
-    }
     setBusy(mode);
     try {
+      // Admin + formation : vrai changement de rôle côté serveur (plus de perms admin en formation)
+      // Admin + pilote/atc : session formation effacée, retour admin + préférence d'affichage locale
       const user = await apiPost<User>("/auth/mode", { mode });
+      if (isAdmin && (mode === "pilote" || mode === "atc")) {
+        localStorage.setItem(ADMIN_MODE_KEY, mode);
+        window.dispatchEvent(new Event("sc-mode"));
+      }
+      if (mode === "instructeur" || mode === "formation_pilote") {
+        localStorage.removeItem(ADMIN_MODE_KEY);
+      }
       qc.clear();
       qc.setQueryData(["me"], user);
-      toast.success(mode === "atc" ? tr("Mode ATC activé") : mode === "instructeur" ? tr("Mode formation activé") : tr("Mode Pilote activé"));
+      const msg =
+        mode === "atc" ? tr("Mode ATC activé")
+        : mode === "instructeur" ? tr("Mode formation ATC activé")
+        : mode === "formation_pilote" ? tr("Mode formation Pilote activé")
+        : tr("Mode Pilote activé");
+      toast.success(msg);
       nav(target, { replace: true });
     } catch (e) {
       toast.error(errMsg(e));
@@ -135,14 +144,22 @@ export default function Mode() {
       icon: RadioTower,
       text: tr("Contrôlez le trafic : ouvrez votre position (sol, tour, approche ou centre) et gérez les vols de votre zone en direct sur le radar."),
     },
-    // profil fictif : visible des instructeurs (rôle Discord) ET des admins
-    ...(isAdmin || u.access.instructor
-      ? [{
-          mode: "instructeur" as const,
-          title: tr("Pilote ATC (formation)"),
-          icon: GraduationCap,
-          text: tr("Profil fictif pour former les contrôleurs : positions d'entraînement et ATIS, sans aucune ouverture sur Discord ni impact sur le trafic réel."),
-        }]
+    // profils de formation : instructeurs Discord + admins
+    ...(canTrain
+      ? [
+          {
+            mode: "instructeur" as const,
+            title: tr("Formation ATC"),
+            icon: GraduationCap,
+            text: tr("Profil fictif pour former les contrôleurs : positions d'entraînement et ATIS, sans aucune ouverture sur Discord ni impact sur le trafic réel. Aucun droit admin."),
+          },
+          {
+            mode: "formation_pilote" as const,
+            title: tr("Formation Pilote"),
+            icon: Plane,
+            text: tr("Entraînement côté pilote : mêmes outils qu'un pilote (plan de vol, radar), sans droits admin ni impact formation ATC."),
+          },
+        ]
       : []),
   ];
 
@@ -157,13 +174,16 @@ export default function Mode() {
             <p className="text-sm text-muted-foreground">{tr("Vous pourrez changer de mode à tout moment depuis l'en-tête.")}</p>
           </div>
         </div>
-        <div className={cn("grid gap-5", cards.length > 2 ? "md:grid-cols-3" : "md:grid-cols-2")}>
+        <div className={cn("grid gap-5", cards.length >= 4 ? "md:grid-cols-2 xl:grid-cols-4" : cards.length > 2 ? "md:grid-cols-3" : "md:grid-cols-2")}>
           {cards.map(({ mode, title, icon: Icon, text }) => {
-            const noRole = !isAdmin && !(mode === "instructeur" ? u.access.instructor : u.access[mode]);
-            const st = mode === "instructeur" ? undefined : u.inactivity?.[mode];
+            const isFormation = mode === "instructeur" || mode === "formation_pilote";
+            const noRole = isFormation
+              ? !canTrain
+              : !isAdmin && !u.access[mode as AM];
+            const st = isFormation ? undefined : u.inactivity?.[mode as AM];
             const suspended = !isAdmin && !noRole && st?.state === "suspendu";
-            const phoneLock = mode !== "pilote" && phone ? PHONE_ATC_MSG : null; // also checked by the server
-            const busyReason = !noRole && !suspended ? phoneLock ?? (mode === "instructeur" ? null : lockQ.data?.[mode]) ?? null : null;
+            const phoneLock = mode !== "pilote" && mode !== "formation_pilote" && phone ? PHONE_ATC_MSG : null;
+            const busyReason = !noRole && !suspended ? phoneLock ?? (isFormation ? null : lockQ.data?.[mode as AM]) ?? null : null;
             const locked = noRole || suspended || !!busyReason;
             return (
               <div
@@ -202,7 +222,7 @@ export default function Mode() {
                     <p className="text-amber-100/90">{trServer(busyReason)}</p>
                   </div>
                 )}
-                {suspended && st && mode !== "instructeur" && <Suspended mode={mode} st={st} onSent={(nu) => qc.setQueryData(["me"], nu)} />}
+                {suspended && st && !isFormation && <Suspended mode={mode as AM} st={st} onSent={(nu) => qc.setQueryData(["me"], nu)} />}
                 {busy === mode && <p className="mt-3 text-xs text-[color:var(--sc-accent)]">{tr("Activation…")}</p>}
               </div>
             );

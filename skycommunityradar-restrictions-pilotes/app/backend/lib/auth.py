@@ -49,8 +49,19 @@ def blocked_reason(user: dict) -> str | None:
 
 def effective_role(user: dict, mode: str | None) -> str:
     """The single source of truth for a request's role, derived from the Discord roles stored server-side
-    (lib/discord_roles). Administrateur / Créateur -> "admin"; otherwise the chosen mode, if Discord allows it."""
+    (lib/discord_roles). Administrateur / Créateur -> "admin"; otherwise the chosen mode, if Discord allows it.
+
+    Formation modes take priority even for admins: while training they must not keep admin powers.
+    - instructeur → ATC training (fictive positions)
+    - formation_pilote → pilot training (same rights as pilote, no admin)
+    """
     a = access_of(user)
+    can_train = a["instructor"] or a["admin"]
+    # Formation first: admin/instructor explicitly chose a limited training profile
+    if mode == "instructeur" and can_train:
+        return "instructeur"
+    if mode == "formation_pilote" and can_train:
+        return "pilote"
     if a["admin"]:
         return "admin"
     suspended = user.get("suspended") or ()  # access suspended for inactivity (lib/activity), set by current_user

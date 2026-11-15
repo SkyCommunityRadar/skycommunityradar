@@ -67,17 +67,39 @@ async def get_mode_lock(request: Request, user: dict = Depends(current_user)):
 
 @router.post("/mode", response_model=UserOut)
 async def choose_mode(body: ModeIn, response: Response, request: Request, user: dict = Depends(current_user)):
-    if effective_role(user, None) == "admin":
-        raise HTTPException(400, "Le compte administrateur a déjà accès à tous les outils.")
     a = access_of(user)
+    is_admin = a["admin"]
+    can_train = a["instructor"] or is_admin
+
+    # --- Formation ATC (positions fictives) : admin ou instructeur Discord ---
     if body.mode == "instructeur":
-        if not a["instructor"]:
+        if not can_train:
             raise HTTPException(403, "Ce profil est réservé aux instructeurs de formation SkyCommunity.")
-        ensure_not_phone(request)  # même interface que l'ATC : ordinateur ou tablette
+        ensure_not_phone(request)
         user["role"] = effective_role(user, body.mode)
         set_session(response, user, request, body.mode)
         # volontairement aucun log_event : le profil de formation reste hors des journaux d'activité
         return user_out(user)
+
+    # --- Formation Pilote : même droits qu'un pilote, sans pouvoirs admin ---
+    if body.mode == "formation_pilote":
+        if not can_train:
+            raise HTTPException(403, "Ce profil est réservé aux instructeurs de formation SkyCommunity.")
+        user["role"] = effective_role(user, body.mode)
+        set_session(response, user, request, body.mode)
+        return user_out(user)
+
+    # --- Admin qui quitte la formation : revenir en admin plein (mode session effacé) ---
+    if is_admin and body.mode in ("pilote", "atc"):
+        if body.mode == "atc":
+            ensure_not_phone(request)
+        set_session(response, user, request, None)
+        user["role"] = "admin"
+        return user_out(user)
+
+    if is_admin:
+        raise HTTPException(400, "Le compte administrateur a déjà accès à tous les outils.")
+
     if body.mode == "atc" and not a["atc"]:
         raise HTTPException(403, "Le mode ATC nécessite le rôle ATC sur le serveur Discord SkyCommunity.")
     if body.mode == "pilote" and not a["pilote"]:
