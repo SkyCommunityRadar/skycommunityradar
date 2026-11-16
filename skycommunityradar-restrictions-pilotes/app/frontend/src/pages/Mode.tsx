@@ -166,7 +166,7 @@ export default function Mode() {
   return (
     <div className="relative flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_30%_20%,var(--sc-glow)_0%,var(--sc-topbar)_55%)] p-6">
       <LangSwitch className="absolute right-4 top-4" />
-      <div className="w-full max-w-3xl space-y-8">
+      <div className={cn("w-full space-y-8", cards.length >= 4 ? "max-w-2xl" : "max-w-3xl")}>
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt={tr("SkyCommunity")} className="h-12 w-12 shrink-0 rounded-full bg-white ring-2 ring-[color:var(--sc-accent)]/40" />
           <div>
@@ -174,7 +174,7 @@ export default function Mode() {
             <p className="text-sm text-muted-foreground">{tr("Vous pourrez changer de mode à tout moment depuis l'en-tête.")}</p>
           </div>
         </div>
-        <div className={cn("grid gap-5", cards.length >= 4 ? "md:grid-cols-2 xl:grid-cols-4" : cards.length > 2 ? "md:grid-cols-3" : "md:grid-cols-2")}>
+        <div className={cn("grid gap-5", cards.length >= 4 ? "sm:grid-cols-2" : cards.length > 2 ? "md:grid-cols-3" : "md:grid-cols-2")}>
           {cards.map(({ mode, title, icon: Icon, text }) => {
             const isFormation = mode === "instructeur" || mode === "formation_pilote";
             const noRole = isFormation
@@ -196,6 +196,7 @@ export default function Mode() {
                 data-testid={`mode-${mode}-button`}
                 className={cn(
                   "group relative overflow-hidden rounded-xl border p-6 text-left transition-[transform,border-color,box-shadow] duration-200",
+                  cards.length >= 4 && "sm:aspect-square", // 4 cartes : grille 2×2, cartes carrées (grandissent si un encart s'affiche)
                   locked
                     ? "cursor-not-allowed border-border bg-card/60"
                     : "cursor-pointer border-[color:var(--sc-primary)]/50 bg-card hover:-translate-y-1 hover:border-[color:var(--sc-accent)] hover:shadow-[0_12px_40px_-12px_var(--sc-primary)]",
