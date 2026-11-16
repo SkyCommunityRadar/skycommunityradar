@@ -31,9 +31,16 @@ PHASE_SERVICE = {
 }
 
 
-async def online_positions(now: datetime) -> list[dict]:
+async def online_positions(now: datetime, user: dict | None = None) -> list[dict]:
+    """Positions ATC réelles. En mode formation (instructeur), on y ajoute ses positions fictives
+    pour qu'il puisse s'entraîner au contrôle — elles restent hors Discord / classement."""
     since = now - timedelta(seconds=ONLINE_S)
-    return await db.atc_positions.find({"last_seen": {"$gte": since}}, {"_id": 0}).to_list(500)
+    docs = await db.atc_positions.find({"last_seen": {"$gte": since}}, {"_id": 0}).to_list(500)
+    if user and user.get("role") == "instructeur":
+        train = await db.atc_training_positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(20)
+        # Positions de formation : visibles uniquement pour le contexte de cet instructeur
+        docs = list(docs) + train
+    return docs
 
 
 # ---------- geometry ----------
@@ -144,6 +151,11 @@ class Ctx:
     def is_admin(self) -> bool:
         return self.user.get("role") == "admin"
 
+    @property
+    def is_controller(self) -> bool:
+        """ATC réel ou profil formation ATC (instructeur)."""
+        return self.user.get("role") in ("atc", "instructeur", "admin")
+
     def responsible(self, f: dict) -> dict | None:
         return responsible(f, self.positions, self.now)
 
@@ -153,22 +165,22 @@ class Ctx:
 
     def can_manage(self, f: dict) -> bool:
         """Status, progression, corrections: admin, or the ATC responsible for the flight right now."""
-        return self.is_admin or (self.user.get("role") == "atc" and self.is_responsible(f))
+        return self.is_admin or (self.user.get("role") in ("atc", "instructeur") and self.is_responsible(f))
 
     def concerns_me(self, f: dict) -> bool:
         """Departs from / arrives at one of my airports (or my sector), or crosses my zone under my responsibility."""
         return self.is_responsible(f) or covers_airport(self.mine, f["departure"]) or covers_airport(self.mine, f["arrival"])
 
     def can_edit_strip(self, f: dict) -> bool:
-        return self.is_admin or (self.user.get("role") == "atc" and self.concerns_me(f))
+        return self.is_admin or (self.user.get("role") in ("atc", "instructeur") and self.concerns_me(f))
 
     def can_taxi(self, f: dict, kind: str) -> bool:
         """Taxi routes: the controller providing the ground service of that airport (or admin)."""
         if self.is_admin:
             return True
-        if self.user.get("role") == "pilote":  # uncontrolled flight: the pilot enters their own taxi route
+        if self.user.get("role") in ("pilote", "formation_pilote"):  # vol non contrôlé : le pilote saisit son taxi
             return f.get("pilot_id") == self.user["id"] and not self.responsible(f)
-        if self.user.get("role") != "atc":
+        if self.user.get("role") not in ("atc", "instructeur"):
             return False
         icao = f["departure"] if kind == "taxi_out" else f["arrival"]
         g = airport_controller(self.positions, icao, "GND")
@@ -177,13 +189,13 @@ class Ctx:
     def can_gate(self, f: dict, which: str) -> bool:
         if self.is_admin:
             return True
-        if self.user.get("role") != "atc":
+        if self.user.get("role") not in ("atc", "instructeur"):
             return False
         return self.is_responsible(f) or covers_airport(self.mine, f["departure" if which == "dep" else "arrival"])
 
 
 async def ctx_for(user: dict, now: datetime) -> Ctx:
-    return Ctx(await online_positions(now), user, now)
+    return Ctx(await online_positions(now, user), user, now)
 
 
 async def record_controllers(now: datetime) -> None:

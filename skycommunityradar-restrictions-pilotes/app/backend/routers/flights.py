@@ -165,9 +165,9 @@ async def list_flights(scope: str = Query("active", pattern="^(active|all|mine)$
         q["pilot_id"] = user["id"]
     docs = await db.flights.find(q, {"_id": 0}).sort("updated_at", -1).to_list(500)
     now = utcnow()
-    if user["role"] == "atc":
+    if user["role"] in ("atc", "instructeur"):
         await record_atc_presence(user, now)
-    if user["role"] in ("atc", "admin"):
+    if user["role"] in ("atc", "instructeur", "admin"):
         await atc_heartbeat(user, now)
     ctx = await ctx_for(user, now)
     return FlightsResponse(server_time=now, flights=[summary(f, now, ctx) for f in docs])
@@ -234,7 +234,7 @@ async def do_action(flight_id: str, body: ActionIn, user: dict = Depends(require
     if body.action == "go_around" and not go_around_possible(f, utcnow()):
         raise HTTPException(409, "La remise de gaz se fait en courte finale (moins de 12 NM de la piste) ou après le toucher.")
     now = utcnow()
-    if user["role"] == "pilote" and body.action in ("approche", "atterrissage") and (why := pilot_action_block(f, body.action, now)):
+    if user["role"] in ("pilote", "formation_pilote") and body.action in ("approche", "atterrissage") and (why := pilot_action_block(f, body.action, now)):
         raise HTTPException(409, why)
     before = f["phase"]
     to = f.get("prev_phase") if body.action == "reprendre" else a["to"]
@@ -409,7 +409,7 @@ async def nudge(flight_id: str, body: NudgeIn, user: dict = Depends(require("fli
     if f["phase"] not in ACTIVE or not track or track_length(f, track) <= 0:
         raise HTTPException(409, "Aucune trajectoire (roulage ou route) à ajuster dans cette phase.")
     now = utcnow()
-    if user["role"] == "pilote":
+    if user["role"] in ("pilote", "formation_pilote"):
         if (why := pilot_move_block(f, now)):
             raise HTTPException(409, why)
         record_pilot_move(f, now)
@@ -493,25 +493,25 @@ async def set_gates(flight_id: str, body: GatesIn, user: dict = Depends(require(
     if f["phase"] not in ACTIVE:
         raise HTTPException(409, "Le vol est clôturé.")
     ctx = await ctx_for(user, utcnow())
-    if user["role"] == "pilote" and ctx.responsible(f):
+    if user["role"] in ("pilote", "formation_pilote") and ctx.responsible(f):
         r = ctx.responsible(f)
         raise HTTPException(403, f"Vol contrôlé par {r['callsign']} : c'est le contrôleur qui choisit les postes.")
     changes = []
     if body.dep_gate != (f.get("dep_gate") or {}).get("ref"):
         if f["phase"] not in DEP_GATE_PHASES:
             raise HTTPException(409, "Le poste de départ ne peut plus être modifié après le début du repoussage.")
-        if user["role"] == "atc" and not ctx.can_gate(f, "dep"):
+        if user["role"] in ("atc", "instructeur") and not ctx.can_gate(f, "dep"):
             raise HTTPException(403, f"{f['departure']} ne relève d'aucune de vos positions : poste en lecture seule.")
         f["dep_gate"] = gate_ref(await get_graph(f["departure"]), body.dep_gate)
         f["taxi_out"], f["holding_point"] = None, None  # both belonged to the old stand: to be chosen again
         changes.append(f"départ {body.dep_gate or '—'}")
     if body.arr_gate != (f.get("arr_gate") or {}).get("ref"):
-        if user["role"] == "pilote" and f.get("arr_gate_by") == "atc":
+        if user["role"] in ("pilote", "formation_pilote") and f.get("arr_gate_by") == "atc":
             raise HTTPException(409, "La porte d'arrivée a été assignée par le contrôle.")
-        if user["role"] == "atc" and not ctx.can_gate(f, "arr"):
+        if user["role"] in ("atc", "instructeur") and not ctx.can_gate(f, "arr"):
             raise HTTPException(403, f"{f['arrival']} ne relève d'aucune de vos positions : poste en lecture seule.")
         f["arr_gate"] = gate_ref(await get_graph(f["arrival"]), body.arr_gate)
-        f["arr_gate_by"] = "pilote" if user["role"] == "pilote" else "atc"
+        f["arr_gate_by"] = "pilote" if user["role"] in ("pilote", "formation_pilote") else "atc"
         if f.get("taxi_in"):  # the drawn route ended at the old stand
             now = utcnow()
             rebase(f, now)
@@ -556,7 +556,7 @@ async def set_taxi(flight_id: str, body: TaxiIn, user: dict = Depends(require("f
     ground = await get_ground(icao)
     new_gate = None
     if not out and body.gate_ref and body.gate_ref != gate.get("ref"):
-        if user["role"] == "pilote" and f.get("arr_gate_by") == "atc":
+        if user["role"] in ("pilote", "formation_pilote") and f.get("arr_gate_by") == "atc":
             raise HTTPException(409, "La porte d'arrivée a été assignée par le contrôle.")
         gate = new_gate = gate_ref(await get_graph(icao), body.gate_ref)
     if not out and not gate.get("ref") and ground.get("gates"):
@@ -586,7 +586,7 @@ async def set_taxi(flight_id: str, body: TaxiIn, user: dict = Depends(require("f
         f["holding_point"] = hp
     if new_gate:
         f["arr_gate"] = new_gate
-        f["arr_gate_by"] = "pilote" if user["role"] == "pilote" else "atc"
+        f["arr_gate_by"] = "pilote" if user["role"] in ("pilote", "formation_pilote") else "atc"
     if origin:
         f["progress"].update(track=body.kind, anchor_dist=0.0, anchor_at=now)
         if f["phase"] == "point_attente":  # nouveau point d'attente au dernier moment : l'avion s'y rend
@@ -614,14 +614,14 @@ async def navigation(flight_id: str, body: NavIn, user: dict = Depends(require("
     check_version(f, body.version)
     now = utcnow()
     ctx = await ctx_for(user, now)
-    if user["role"] == "pilote" and f["pilot_id"] != user["id"]:
+    if user["role"] in ("pilote", "formation_pilote") and f["pilot_id"] != user["id"]:
         raise HTTPException(403, "Ce vol appartient à un autre pilote.")
     ensure_control(f, user, ctx)
     if f["phase"] not in ("en_route", "approche"):
         raise HTTPException(409, "Direct et hold se demandent en vol (en route ou en approche).")
     h = f.get("holding")
     if body.op == "vector":
-        if user["role"] not in ("atc", "admin"):
+        if user["role"] not in ("atc", "instructeur", "admin"):
             raise HTTPException(403, "Seul le contrôleur responsable du vol peut donner des vecteurs.")
         if body.heading is None:
             raise HTTPException(422, "Indiquez le cap à suivre.")
@@ -693,7 +693,7 @@ async def move_profile_marker(flight_id: str, body: ProfileMarkerIn, user: dict 
     check_version(f, body.version)
     now = utcnow()
     ctx = await ctx_for(user, now)
-    if f["pilot_id"] != user["id"] and user["role"] not in ("atc", "admin"):
+    if f["pilot_id"] != user["id"] and user["role"] not in ("atc", "instructeur", "admin"):
         raise HTTPException(403, "Ce vol appartient à un autre pilote.")
     ensure_control(f, user, ctx)  # a controlled flight: only its controller changes it, not the pilot
     if f["phase"] not in ACTIVE:

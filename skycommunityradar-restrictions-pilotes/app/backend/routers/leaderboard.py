@@ -45,7 +45,7 @@ def _rank(rows: list[dict], levels: list[tuple[float, str]] | None = None) -> li
 async def leaderboard(user: dict = Depends(current_user)):
     since = utcnow() - timedelta(days=30)
     agg: dict[str, dict] = {}
-    async for f in db.flights.find({"block_off_at": {"$ne": None}},
+    async for f in db.flights.find({"block_off_at": {"$ne": None}, "training": {"$ne": True}},
                                    {"_id": 0, "pilot_id": 1, "block_off_at": 1, "block_on_at": 1, "phase": 1, **HOURS_PROJECTION}):
         a = agg.setdefault(f["pilot_id"], {"hours": 0.0, "flights": 0, "days": set()})
         off, on = aware(f["block_off_at"]), aware(f.get("block_on_at"))

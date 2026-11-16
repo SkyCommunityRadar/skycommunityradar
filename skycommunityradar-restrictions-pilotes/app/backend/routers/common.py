@@ -91,7 +91,7 @@ def ensure_control(f: dict, user: dict, ctx: Ctx) -> None:
     if user["role"] == "admin":
         return
     r = ctx.responsible(f)
-    if user["role"] == "atc":
+    if user["role"] in ("atc", "instructeur"):
         if not r or r["user_id"] != user["id"]:
             raise HTTPException(403, (f"Ce vol relève de {r['callsign']} ({r['controller']}) : consultation seulement."
                                       if r else "Ce vol ne relève d'aucune de vos positions : consultation seulement."))
@@ -194,7 +194,7 @@ def detail(f: dict, user: dict, now: datetime, ctx: Ctx) -> FlightDetail:
     r = ctx.responsible(f)
     if user["role"] == "admin":
         may_act = True
-    elif user["role"] == "atc":
+    elif user["role"] in ("atc", "instructeur"):
         may_act = bool(r and r["user_id"] == user["id"])
     else:
         may_act = owner and not r
@@ -202,8 +202,8 @@ def detail(f: dict, user: dict, now: datetime, ctx: Ctx) -> FlightDetail:
     pi = plan_info(f)
     sid, star = pi["sid"], pi["star"]
     taxi_out, taxi_in = active and ctx.can_taxi(f, "taxi_out"), active and ctx.can_taxi(f, "taxi_in")
-    dep_gate = active and (ctx.can_gate(f, "dep") if user["role"] != "pilote" else owner and not r)
-    arr_gate = active and (ctx.can_gate(f, "arr") if user["role"] != "pilote" else owner and not r)
+    dep_gate = active and (ctx.can_gate(f, "dep") if user["role"] not in ("pilote", "formation_pilote") else owner and not r)
+    arr_gate = active and (ctx.can_gate(f, "arr") if user["role"] not in ("pilote", "formation_pilote") else owner and not r)
     acts = allowed_actions(f, user["role"], owner, bool(r)) if may_act else []
     return FlightDetail(
         controller_name=r["controller"] if r else None, controller_callsign=r["callsign"] if r else None,
@@ -226,8 +226,8 @@ def detail(f: dict, user: dict, now: datetime, ctx: Ctx) -> FlightDetail:
             nxt if (nxt := step_for(f["phase"], "next", user["role"]) if active and may_act else None)
             and not any(ACTIONS[a["code"]]["to"] == nxt for a in acts) else None
         ),
-        pilot_moves_left=pilot_moves_left(f, now)[0] if user["role"] == "pilote" and owner else None,
-        pilot_moves_wait_min=pilot_moves_left(f, now)[1] if user["role"] == "pilote" and owner else 0,
+        pilot_moves_left=pilot_moves_left(f, now)[0] if user["role"] in ("pilote", "formation_pilote") and owner else None,
+        pilot_moves_wait_min=pilot_moves_left(f, now)[1] if user["role"] in ("pilote", "formation_pilote") and owner else 0,
         allowed_actions=acts,
         can_control="flight:control" in perms and active and may_act,
         can_edit_taxi=taxi_out or taxi_in,
@@ -237,7 +237,7 @@ def detail(f: dict, user: dict, now: datetime, ctx: Ctx) -> FlightDetail:
         can_pick_holding=active and may_act and f["phase"] in ("preparation", "repoussage"),
         holding=holding_info(f, now),
         can_nav=active and (may_act or user["role"] == "admin") and f["phase"] in ("en_route", "approche"),
-        can_vector=active and may_act and user["role"] in ("atc", "admin") and f["phase"] in VECTOR_PHASES
+        can_vector=active and may_act and user["role"] in ("atc", "instructeur", "admin") and f["phase"] in VECTOR_PHASES
         and f["progress"].get("track") == "air",
         reject_until=(aware(f.get("takeoff_at")) + timedelta(seconds=REJECT_WINDOW_S)) if f["phase"] == "decollage" and f.get("takeoff_at") else None,
         takeoff_cleared=bool(f.get("takeoff_cleared")) and f["phase"] == "alignement",
@@ -316,6 +316,8 @@ def new_flight_doc(user: dict, *, callsign: str, aircraft_type: str, route: list
                    cruise_alt_ft: int | None, plan_meta: dict | None, dep_gate: dict | None,
                    arr_gate: dict | None) -> dict:
     now = utcnow()
+    # Vols créés en mode formation : hors Discord, hors activité, hors classement
+    training = user.get("role") in ("instructeur", "formation_pilote")
     return dict(
         id=str(uuid.uuid4()), callsign=callsign, pilot_id=user["id"], pilot_name=user["display_name"],
         aircraft_type=aircraft_type, departure=route[0]["ident"], arrival=route[-1]["ident"], phase="preparation",
@@ -323,5 +325,5 @@ def new_flight_doc(user: dict, *, callsign: str, aircraft_type: str, route: list
         cruise_alt_ft=cruise_alt_ft, plan_meta=plan_meta or {}, taxi_out=None, taxi_in=None, manual_position=None,
         dep_gate=dep_gate, arr_gate=arr_gate,
         progress=dict(track=None, anchor_dist=0.0, anchor_at=now, hold=False), last_wp_index=0,
-        created_at=now, updated_at=now,
+        created_at=now, updated_at=now, training=training,
     )

@@ -64,7 +64,8 @@ def concerned(user: dict, kind: str) -> bool:
 
 
 async def last_flight_at(user_id: str) -> datetime | None:
-    f = await db.flights.find_one({"pilot_id": user_id, "block_off_at": {"$ne": None}},
+    # Vols de formation (training=True) exclus : ne comptent pas pour l'activité réelle / Discord
+    f = await db.flights.find_one({"pilot_id": user_id, "block_off_at": {"$ne": None}, "training": {"$ne": True}},
                                   {"_id": 0, "updated_at": 1}, sort=[("updated_at", -1)])
     return aware(f["updated_at"]) if f else None
 

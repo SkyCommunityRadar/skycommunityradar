@@ -48,8 +48,8 @@ ROLLOUT_KT = 60.0  # average speed of the landing roll (touchdown ~130 kt down t
 TAKEOFF_ROLL_NM = 0.9  # distance en NM pendant laquelle on reste à TAKEOFF_ROLL_KT
 TAXI_PHASES = ("roulage", "roulage_arrivee", "retour_parking")  # where the « Stop / Reprendre » button exists
 
-P = ("pilote", "atc", "admin")
-C = ("atc", "admin")
+P = ("pilote", "formation_pilote", "atc", "instructeur", "admin")
+C = ("atc", "instructeur", "admin")
 ACTIONS: dict[str, dict] = {
     # « Prêt au départ » was removed (nov. 2026): from Préparation the pilot pushes back or taxis directly.
     "repoussage": dict(label="Début du repoussage", frm=["preparation"], to="repoussage", roles=P),

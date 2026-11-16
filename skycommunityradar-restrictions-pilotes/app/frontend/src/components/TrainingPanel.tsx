@@ -33,7 +33,7 @@ export default function TrainingPanel() {
           <GraduationCap className="h-4 w-4" />{tr("Mode formation (fictif)")}
         </div>
         <p className="text-xs text-violet-100/80">
-          {tr("Vos positions sont fictives : rien n'est envoyé au bot Discord, aucune fréquence réelle n'est ouverte, et les autres membres ne les voient pas. Le trafic réel reste consultable en lecture seule.")}
+          {tr("Toutes les fonctions ATC sont disponibles (ouvrir une fréquence, strips, contrôler un vol, déposer un plan de vol). Vos positions restent fictives : rien n'est envoyé au bot Discord, les autres membres ne les voient pas, et rien n'est compté sur le profil réel.")}
         </p>
       </div>
 

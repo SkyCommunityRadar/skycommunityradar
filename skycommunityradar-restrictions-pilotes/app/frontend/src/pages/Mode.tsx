@@ -151,13 +151,13 @@ export default function Mode() {
             mode: "instructeur" as const,
             title: tr("Formation ATC"),
             icon: GraduationCap,
-            text: tr("Profil fictif pour former les contrôleurs : positions d'entraînement et ATIS, sans aucune ouverture sur Discord ni impact sur le trafic réel. Aucun droit admin."),
+            text: tr("Toutes les fonctions ATC (fréquences, strips, contrôle, plan de vol) en bac à sable : rien n'est envoyé sur Discord ni compté sur le profil réel. Aucun droit admin."),
           },
           {
             mode: "formation_pilote" as const,
             title: tr("Formation Pilote"),
             icon: Plane,
-            text: tr("Entraînement côté pilote : mêmes outils qu'un pilote (plan de vol, radar), sans droits admin ni impact formation ATC."),
+            text: tr("Toutes les fonctions pilote (plan de vol, radar, phases) en bac à sable : hors Discord, hors classement et hors règle d'activité. Aucun droit admin."),
           },
         ]
       : []),
@@ -195,8 +195,8 @@ export default function Mode() {
                 aria-disabled={locked}
                 data-testid={`mode-${mode}-button`}
                 className={cn(
-                  "group relative overflow-hidden rounded-xl border p-6 text-left transition-[transform,border-color,box-shadow] duration-200",
-                  cards.length >= 4 && "sm:aspect-square", // 4 cartes : grille 2×2, cartes carrées (grandissent si un encart s'affiche)
+                  "group relative overflow-hidden rounded-xl border p-4 text-left transition-[transform,border-color,box-shadow] duration-200 sm:p-5",
+                  // hauteur adaptée au contenu (plus de carré forcé)
                   locked
                     ? "cursor-not-allowed border-border bg-card/60"
                     : "cursor-pointer border-[color:var(--sc-primary)]/50 bg-card hover:-translate-y-1 hover:border-[color:var(--sc-accent)] hover:shadow-[0_12px_40px_-12px_var(--sc-primary)]",
@@ -204,13 +204,13 @@ export default function Mode() {
               >
                 <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[color:var(--sc-primary)]/15 blur-2xl" />
                 <div className={cn(locked && "opacity-55")}>
-                  <Icon className="h-9 w-9 text-[color:var(--sc-accent)]" />
-                  <div className="mt-4 flex items-center gap-2 text-xl font-semibold">
+                  <Icon className="h-8 w-8 text-[color:var(--sc-accent)]" />
+                  <div className="mt-3 flex items-center gap-2 text-lg font-semibold">
                     {title} {noRole && <Lock className="h-4 w-4 text-muted-foreground" />}
                     {suspended && <Moon className="h-4 w-4 text-amber-300" />}
                     {busyReason && <Lock className="h-4 w-4 text-amber-300" />}
                   </div>
-                  <p className="mt-1.5 text-sm text-muted-foreground">{text}</p>
+                  <p className="mt-1 text-sm leading-snug text-muted-foreground">{text}</p>
                 </div>
                 {noRole && (
                   <div className="mt-3 rounded-lg border border-border bg-background/50 p-3 text-xs" data-testid={`mode-${mode}-locked`}>
