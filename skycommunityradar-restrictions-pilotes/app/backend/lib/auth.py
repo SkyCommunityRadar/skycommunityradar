@@ -27,9 +27,14 @@ PERMS: dict[str, set[str]] = {
     # Formation pilote : mêmes droits qu'un pilote, sans admin / lead / suivi
     "formation_pilote": {"flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note", "review:write", "planning:read"},
     "atc": {"flight:read", "flight:act", "flight:taxi", "flight:gates", "flight:note", "flight:control", "strip:read", "strip:write", "atc:position", "review:write", "history:read", "planning:read", "planning:write"},
-    # Profil de formation (instructeurs) : FICTIF. Lecture seule du trafic + positions d'entraînement isolées
-    # (collection atc_training_positions). Aucune action sur un vol réel, aucun envoi au bot Discord.
-    "instructeur": {"flight:read", "strip:read", "history:read", "planning:read", "training:position"},
+    # Formation ATC : toutes les fonctions pilote + ATC pour s'entraîner.
+    # Positions = training:position uniquement (pas atc:position → rien vers Discord).
+    # Pas de droits admin / lead / suivi.
+    "instructeur": {
+        "flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note",
+        "flight:control", "strip:read", "strip:write", "review:write", "history:read",
+        "planning:read", "planning:write", "training:position",
+    },
     "admin": {"flight:read", "flight:create", "flight:act", "flight:taxi", "flight:gates", "flight:note",
               "flight:control", "strip:read", "strip:write", "atc:position", "review:write", "history:read", "admin:reviews", "admin:users", "admin:flights", "admin:airports", "admin:log", "planning:read", "planning:write", "training:position"},
 }

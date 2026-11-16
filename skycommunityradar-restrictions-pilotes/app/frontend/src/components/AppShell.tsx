@@ -446,10 +446,13 @@ function TopBar({ user, mode }: { user: User | undefined; mode: UiMode }) {
 }
 
 function navItems(user: User, mode: UiMode) {
+  // Formation ATC : outils ATC + dépôt de plan de vol (sandbox, hors Discord)
+  const formationAtc = user.role === "instructeur";
   const items =
-    mode === "atc"
+    mode === "atc" || formationAtc
       ? [
           { to: "/", label: tr("Radar"), icon: Radar, id: "radar" },
+          ...(formationAtc ? [{ to: "/flights/new", label: tr("Nouveau vol"), icon: PlusCircle, id: "new-flight" }] : []),
           { to: "/history", label: tr("Historique des vols"), icon: History, id: "history" },
           { to: "/signalements", label: tr("Signalements"), icon: AlertTriangle, id: "signalements" },
           { to: "/planning", label: tr("Planning ATC"), icon: CalendarDays, id: "planning" },
