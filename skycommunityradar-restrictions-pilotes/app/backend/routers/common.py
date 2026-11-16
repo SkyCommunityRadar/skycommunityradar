@@ -226,8 +226,8 @@ def detail(f: dict, user: dict, now: datetime, ctx: Ctx) -> FlightDetail:
             nxt if (nxt := step_for(f["phase"], "next", user["role"]) if active and may_act else None)
             and not any(ACTIONS[a["code"]]["to"] == nxt for a in acts) else None
         ),
-        pilot_moves_left=pilot_moves_left(f, now)[0] if user["role"] in ("pilote", "formation_pilote") and owner else None,
-        pilot_moves_wait_min=pilot_moves_left(f, now)[1] if user["role"] in ("pilote", "formation_pilote") and owner else 0,
+        pilot_moves_left=pilot_moves_left(f, now)[0] if user["role"] == "pilote" and owner else None,
+        pilot_moves_wait_min=pilot_moves_left(f, now)[1] if user["role"] == "pilote" and owner else 0,
         allowed_actions=acts,
         can_control="flight:control" in perms and active and may_act,
         can_edit_taxi=taxi_out or taxi_in,

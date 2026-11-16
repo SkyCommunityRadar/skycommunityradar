@@ -417,7 +417,7 @@ async def nudge(flight_id: str, body: NudgeIn, user: dict = Depends(require("fli
     if f["phase"] not in ACTIVE or not track or track_length(f, track) <= 0:
         raise HTTPException(409, "Aucune trajectoire (roulage ou route) à ajuster dans cette phase.")
     now = utcnow()
-    if user["role"] in ("pilote", "formation_pilote"):
+    if user["role"] == "pilote":
         if (why := pilot_move_block(f, now)):
             raise HTTPException(409, why)
         record_pilot_move(f, now)
