@@ -1,4 +1,6 @@
 import math
+from datetime import timedelta
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -165,10 +167,16 @@ async def list_flights(scope: str = Query("active", pattern="^(active|all|mine)$
         q["pilot_id"] = user["id"]
     docs = await db.flights.find(q, {"_id": 0}).sort("updated_at", -1).to_list(500)
     now = utcnow()
-    if user["role"] in ("atc", "instructeur"):
+    # Heures ATC / profil réel : uniquement le mode ATC réel (pas la formation)
+    if user["role"] == "atc":
         await record_atc_presence(user, now)
-    if user["role"] in ("atc", "instructeur", "admin"):
+    if user["role"] in ("atc", "admin"):
         await atc_heartbeat(user, now)
+    elif user["role"] == "instructeur":
+        # Positions fictives : heartbeat sans toucher atc_seconds ni Discord
+        await db.atc_training_positions.update_many(
+            {"user_id": user["id"]}, {"$set": {"last_seen": now, "expires_at": now + timedelta(hours=6)}}
+        )
     ctx = await ctx_for(user, now)
     return FlightsResponse(server_time=now, flights=[summary(f, now, ctx) for f in docs])
 

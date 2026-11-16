@@ -324,7 +324,7 @@ function PlanningView({ user }: { user: User }) {
   const [week, setWeek] = useState(() => mondayOf(todayUtc()));
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(week, i)), [week]);
   const q = useQuery<PlanningSlot[]>({ queryKey: ["planning", week], queryFn: () => apiGet(`/planning?start=${week}&days=7`), refetchInterval: 30_000 });
-  const canPublish = user.role === "atc" || user.role === "admin";
+  const canPublish = user.role === "atc" || user.role === "admin" || user.role === "instructeur";
   const lead = user.access.atc_lead || user.access.admin;
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["planning"] });

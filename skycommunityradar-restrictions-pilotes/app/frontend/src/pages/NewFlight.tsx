@@ -172,22 +172,25 @@ export default function NewFlight() {
   return (
     <AppShell>
       {(user) =>
-        user.role === "pilote" || user.role === "admin" ? (
+        ["pilote", "formation_pilote", "instructeur", "admin"].includes(user.role) ? (
           <div className="flex min-h-full flex-col gap-4 p-4 md:h-full md:p-5">
             <h1 className="text-xl font-semibold tracking-tight">{tr("Nouveau vol")}</h1>
+            {(user.role === "instructeur" || user.role === "formation_pilote") && (
+              <p className="rounded-lg border border-violet-400/40 bg-violet-500/10 px-3 py-2 text-xs text-violet-100/90" data-testid="new-flight-training-notice">
+                {tr("Mode formation : ce vol est un exercice. Il n'est pas annoncé sur Discord et ne compte ni au classement ni à l'activité du profil.")}
+              </p>
+            )}
             <Tabs defaultValue="simbrief" className="flex-1 min-h-0 flex flex-col">
               <TabsList>
                 <TabsTrigger value="simbrief" data-testid="tab-simbrief">{tr("Import SimBrief")}</TabsTrigger>
-  
               </TabsList>
               <TabsContent value="simbrief" className="flex-1 min-h-0 pt-3">
                 <SimbriefTab user={user} />
               </TabsContent>
-
             </Tabs>
           </div>
         ) : (
-          <p className="p-6 text-sm text-muted-foreground" data-testid="new-flight-forbidden">{tr("Seuls les pilotes et administrateurs peuvent créer un vol.")}</p>
+          <p className="p-6 text-sm text-muted-foreground" data-testid="new-flight-forbidden">{tr("Seuls les pilotes, administrateurs et profils de formation peuvent créer un vol.")}</p>
         )
       }
     </AppShell>
