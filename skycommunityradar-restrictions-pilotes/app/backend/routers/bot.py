@@ -115,3 +115,21 @@ async def bot_frequency_closed(freq_id: int, request: Request):
     actor = {"id": "discord-bot", "display_name": staff, "role": "admin"}
     await close_positions(docs, "fermeture", actor)
     return {"ok": True, "closed": [d["callsign"] for d in docs]}
+
+
+@router.get("/atis/{icao}")
+async def bot_atis(icao: str, request: Request):
+    """Lettre ATIS + texte pour le bot Discord (/atis).
+    Même source que le bandeau du site (collection Mongo atis_letters + CheckWX).
+    Ainsi /atis sur Discord et le bandeau SkyRadar affichent la même Information X.
+    """
+    _check(request)
+    from lib.atis_letter import build_atis
+
+    code = (icao or "").upper().strip()[:4]
+    if len(code) < 4:
+        raise HTTPException(422, "Code OACI invalide (4 lettres).")
+    info = await build_atis(code)
+    if not info:
+        raise HTTPException(404, f"ATIS indisponible pour {code}.")
+    return info

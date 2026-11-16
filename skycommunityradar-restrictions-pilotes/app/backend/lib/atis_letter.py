@@ -100,6 +100,7 @@ async def atis_letter(icao: str | None) -> str | None:
     doc = await db.atis_letters.find_one({"icao": code}, {"_id": 0}) or {}
     letter_index = doc.get("letter_index")
     if letter_index is None:
+        # Même règle que SkyBot (cogs/atis.py) : 1re lettre stable par OACI
         letter_index = sum(ord(c) for c in code) % 26
         await db.atis_letters.update_one(
             {"icao": code},
@@ -213,9 +214,20 @@ async def build_atis(icao: str) -> dict | None:
     lines.append(f"Confirmez information {letter or '—'} au premier contact")
     text = chr(10).join(lines)
 
+    # Nom phonétique (Alpha…Zulu) — identique à la liste du bot Discord
+    _phonetic = (
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+        "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima",
+        "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
+        "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
+        "Xray", "Yankee", "Zulu",
+    )
+    letter_name = _phonetic[_ATIS_LETTERS.index(letter)] if letter in _ATIS_LETTERS else letter
+
     return {
         "icao": code,
-        "letter": letter,
+        "letter": letter,  # A–Z (bandeau site)
+        "letter_name": letter_name,  # Alpha–Zulu (bot Discord /atis)
         "text": text,
         "name": name,
         "elevation_ft": elev,
