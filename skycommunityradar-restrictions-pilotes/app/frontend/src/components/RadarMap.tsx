@@ -248,7 +248,11 @@ export default function RadarMap(p: Props) {
     // element each — the main cause of slow panning and zooming.
     const m = L.map(el.current, {
       minZoom: 3, maxZoom: 19, maxBounds: [[-85, -400], [85, 400]], zoomControl: true, attributionControl: true, worldCopyJump: true,
-      preferCanvas: true, renderer: L.canvas({ padding: 0.5, tolerance: 4 }), zoomSnap: 0.5, wheelPxPerZoomLevel: 90,
+      preferCanvas: true, renderer: L.canvas({ padding: 0.5, tolerance: 4 }),
+      // Trackpad / molette : zoom fluide (valeurs plus sensibles pour trackpad macOS/Windows)
+      scrollWheelZoom: true, wheelDebounceTime: 20, wheelPxPerZoomLevel: 60, zoomSnap: 0.25, zoomDelta: 0.5,
+      // Pinch mobile géré par Leaflet (touch-action: none sur le conteneur)
+      touchZoom: true, bounceAtZoomLimits: false,
     }).setView(
       p.center ?? [47.6, 4.3],
       p.zoom ?? 6,

@@ -101,7 +101,15 @@
 }
 
 /* ---- Radar map ---- */
-.leaflet-container { background: #161B26 !important; font-family: var(--font-mono); }
+/* touch-action: none = Leaflet gère pinch + pan ; la molette / trackpad zooment le radar (pas la page) */
+.leaflet-container {
+  background: #161B26 !important;
+  font-family: var(--font-mono);
+  touch-action: none;
+  -ms-touch-action: none;
+}
+/* S'assurer que le zoom trackpad / molette n'est pas bloqué par un parent scrollable */
+.leaflet-container:focus { outline: none; }
 /* Pendant saisie roulage / pushback : rester en « + », jamais en main Leaflet */
 .leaflet-container.cursor-crosshair,
 .leaflet-container.cursor-crosshair * {
@@ -212,6 +220,7 @@
 /* the page itself never zooms (pinch or double tap): scrolling only. The map keeps its own zoom (Leaflet sets
    touch-action: none on it and handles the gestures). */
 * { touch-action: pan-x pan-y; }
+.leaflet-container, .leaflet-container * { touch-action: none; }
 button, a, [role="tab"] { -webkit-tap-highlight-color: transparent; }
 
 /* ---- Thèmes saisonniers (choisis par le Créateur dans Administration) ----

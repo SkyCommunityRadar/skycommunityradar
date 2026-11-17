@@ -142,7 +142,7 @@ function RadarView({ user, mode }: { user: User; mode: UiMode }) {
   const activeTab = tab === "vol" && !selected ? (isAtc ? "strips" : "vols") : tab;
 
   return (
-    <div className="flex h-full flex-col lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden lg:flex-row">
       <section className="relative min-h-[16dvh] flex-1 bg-radar">
         <RadarMap
           flights={list}

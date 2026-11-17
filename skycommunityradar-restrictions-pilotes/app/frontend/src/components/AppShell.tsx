@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "motion/react";
 import HandoverNotice from "@/components/HandoverNotice";
-import { Bell, Megaphone, LogOut, Radar, RadioTower, Star, X, PlusCircle, History, UserRound, ShieldCheck, Trophy, PanelLeftClose, PanelLeftOpen, Lock, CalendarDays, Activity, AlertTriangle, Heart } from "lucide-react";
+import { Bell, Megaphone, LogOut, Radar, RadioTower, Star, X, PlusCircle, History, UserRound, ShieldCheck, Trophy, PanelLeftClose, PanelLeftOpen, Lock, CalendarDays, Activity, AlertTriangle, Heart, ChevronDown } from "lucide-react";
 import { ApiError, apiGet, apiPost, getModeLock } from "@/lib/api";
 import { errMsg, useMe } from "@/lib/hooks";
 import { endSession } from "@/lib/session";
@@ -163,31 +163,95 @@ function ModeSwitch({ user, mode }: { user: User; mode: UiMode }) {
     "atc",
     ...(canTrain ? (["instructeur", "formation_pilote"] as const) : []),
   ];
+  const labelOf = (m: UiMode | TrainMode) =>
+    m === "pilote" ? tr("Pilote")
+    : m === "atc" ? "ATC"
+    : m === "instructeur" ? tr("Form. ATC")
+    : tr("Form. Pilote");
+  const [open, setOpen] = useState(false);
+  // Ferme le menu mobile au clic extérieur / Escape
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && !t.closest("[data-testid=mode-switch]")) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
   return (
-    <div className="relative flex flex-wrap rounded-lg border border-border bg-background/60 p-0.5 text-sm" role="radiogroup" data-testid="mode-switch">
-      {options.map((m) => (
+    <div className="relative z-[80]" data-testid="mode-switch">
+      {/* Mobile / tablette : menu déroulant bien tappable (évite le bug sur le radar) */}
+      <div className="relative sm:hidden">
         <button
-          key={m}
-          role="radio"
-          aria-checked={current === m}
-          onClick={() => pick(m)}
+          type="button"
           disabled={busy}
-          className={cn(
-            "relative z-10 flex items-center gap-1 rounded-md px-2 py-1 font-semibold transition-colors duration-200 sm:px-3",
-            current === m ? "text-white" : "text-muted-foreground hover:text-foreground",
-          )}
-          data-testid={`mode-switch-${m}`}
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="flex min-h-10 items-center gap-1.5 rounded-lg border border-border bg-background/90 px-2.5 py-1.5 text-sm font-semibold text-foreground shadow-sm backdrop-blur"
+          data-testid="mode-switch-mobile-trigger"
         >
-          {current === m && (
-            <motion.span layoutId="mode-pill" className="absolute inset-0 -z-10 rounded-md bg-[color:var(--sc-primary)]" transition={{ type: "spring", stiffness: 500, damping: 38 }} />
-          )}
-          {m === "pilote" ? tr("Pilote")
-            : m === "atc" ? "ATC"
-            : m === "instructeur" ? tr("Form. ATC")
-            : tr("Form. Pilote")}
-          {((m === "atc" && !canAtc) || (m === "pilote" && !canPilot)) && <Lock className="h-3 w-3" />}
+          <span className="max-w-[7.5rem] truncate">{labelOf(current)}</span>
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
         </button>
-      ))}
+        {open && (
+          <div
+            role="listbox"
+            className="absolute right-0 z-[90] mt-1.5 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-[color:var(--sc-panel)] py-1 shadow-2xl"
+            data-testid="mode-switch-mobile-menu"
+          >
+            {options.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="option"
+                aria-selected={current === m}
+                disabled={busy}
+                onClick={() => { setOpen(false); pick(m); }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-semibold transition-colors",
+                  current === m ? "bg-[color:var(--sc-primary)] text-white" : "text-foreground hover:bg-secondary",
+                )}
+                data-testid={`mode-switch-${m}`}
+              >
+                {labelOf(m)}
+                {((m === "atc" && !canAtc) || (m === "pilote" && !canPilot)) && <Lock className="ml-auto h-3.5 w-3.5 opacity-70" />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* Desktop : pastilles horizontales */}
+      <div className="relative hidden flex-wrap rounded-lg border border-border bg-background/60 p-0.5 text-sm sm:flex" role="radiogroup">
+        {options.map((m) => (
+          <button
+            key={m}
+            role="radio"
+            aria-checked={current === m}
+            onClick={() => pick(m)}
+            disabled={busy}
+            className={cn(
+              "relative z-10 flex items-center gap-1 rounded-md px-2 py-1 font-semibold transition-colors duration-200 sm:px-3",
+              current === m ? "text-white" : "text-muted-foreground hover:text-foreground",
+            )}
+            data-testid={`mode-switch-${m}`}
+          >
+            {current === m && (
+              <motion.span layoutId="mode-pill" className="absolute inset-0 -z-10 rounded-md bg-[color:var(--sc-primary)]" transition={{ type: "spring", stiffness: 500, damping: 38 }} />
+            )}
+            {labelOf(m)}
+            {((m === "atc" && !canAtc) || (m === "pilote" && !canPilot)) && <Lock className="h-3 w-3" />}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -393,7 +457,7 @@ function NotifBell({ user }: { user: User }) {
 
 function TopBar({ user, mode }: { user: User | undefined; mode: UiMode }) {
   return (
-    <header className="relative z-40 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-[color:var(--sc-topbar)]/95 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pt-[env(safe-area-inset-top)] backdrop-blur-md sm:gap-3" data-testid="top-bar">
+    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-2 border-b border-border bg-[color:var(--sc-topbar)]/95 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pt-[env(safe-area-inset-top)] backdrop-blur-md sm:gap-3" data-testid="top-bar">
       <Link to="/" className="flex shrink-0 items-center gap-2.5" data-testid="brand-link">
         <span className="relative inline-flex">
           <ThemeHat />
