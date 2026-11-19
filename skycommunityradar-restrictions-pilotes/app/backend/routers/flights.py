@@ -4,7 +4,7 @@ from datetime import timedelta
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from lib.auth import authorize, require
+from lib.auth import PERMS, authorize, require
 from lib.db import db
 from lib.engine import end_vector, fmt_alt, give_vector, next_point_after_vector, nudge_vector, go_around, go_around_possible, hold_lap_s, next_point_after_hold, nudge_in_hold, reconcile_holding, reject_window_open, compute_position, hold_entered_at, start_holding, lined_up_since, marker_nm, move_marker, PUSH_MAX_M, PUSH_MIN_M, push_distance_m, TAXI_PHASES, ACTIONS, ACTIVE, AIR_PHASES, PHASES, taxi_origin, direct_to, taxi_block, enter_phase, rebase, snap_distance, \
     step_for, step_target, track_length, utcnow, aware
@@ -16,7 +16,7 @@ from models.schemas import (NavIn, ProfileMarkerIn, TaxiStopIn, RunwaysIn, Actio
                             NoteIn, NudgeIn, StepIn, TaxiIn)
 from routers.atc import heartbeat as atc_heartbeat
 from lib.control import ctx_for
-from routers.common import delete_flights_data, apply_runway_change, ensure_control, check_version, detail, detail_for, load_flight, save, summary
+from routers.common import delete_flights_data, apply_runway_change, plan_info, ensure_control, check_version, detail, detail_for, load_flight, save, summary
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 ATC_GAP_S = 120  # polling gaps longer than this end a controlling session
@@ -753,22 +753,31 @@ async def taxi_stop(flight_id: str, body: TaxiStopIn, user: dict = Depends(requi
 
 
 @router.put("/{flight_id}/runways", response_model=FlightDetail)
-async def set_runways(flight_id: str, body: RunwaysIn, user: dict = Depends(require("strip:write"))):
+async def set_runways(flight_id: str, body: RunwaysIn, user: dict = Depends(require("flight:act"))):
     """Controller (a position concerned by the flight) or administrator corrects the departure / arrival runway;
-    the route is re-planned on the new runway."""
+    on an uncontrolled flight, its pilot may change the arrival runway only. The route is re-planned on the new runway."""
     f = await load_flight(flight_id)
     check_version(f, body.version)
     if f["phase"] not in ACTIVE:
         raise HTTPException(409, "Le vol est clôturé.")
     now = utcnow()
     ctx = await ctx_for(user, now)
-    if not ctx.can_edit_strip(f):
-        raise HTTPException(403, "Seul un contrôleur concerné par ce vol (ou un administrateur) peut changer de piste.")
-    notes = apply_runway_change(f, body.dep_rwy, body.arr_rwy, now)
+    dep_rwy, by_pilot = body.dep_rwy, False
+    if not ("strip:write" in PERMS.get(user.get("role", ""), set()) and ctx.can_edit_strip(f)):
+        if not ctx.pilot_can_edit_arr_rwy(f):
+            raise HTTPException(403, "Seul un contrôleur concerné par ce vol (ou un administrateur) peut changer de piste. "
+                                     "Le pilote peut changer sa piste d'arrivée uniquement si le vol n'est pas contrôlé.")
+        if body.dep_rwy and body.dep_rwy.strip().upper() != (plan_info(f).get("dep_rwy") or ""):
+            raise HTTPException(403, "Le pilote ne peut changer que sa piste d'arrivée.")
+        dep_rwy, by_pilot = None, True
+    notes = apply_runway_change(f, dep_rwy, body.arr_rwy, now)
     if not notes:
         return detail(f, user, now, ctx)
     await save(f, body.version)
-    await log_event("controle", "Piste modifiée par le contrôle", user, f, " · ".join(notes))
+    if by_pilot:
+        await log_event("strip", "Piste d'arrivée modifiée par le pilote (vol non contrôlé)", user, f, " · ".join(notes))
+    else:
+        await log_event("controle", "Piste modifiée par le contrôle", user, f, " · ".join(notes))
     return detail(f, user, now, ctx)
 
 
