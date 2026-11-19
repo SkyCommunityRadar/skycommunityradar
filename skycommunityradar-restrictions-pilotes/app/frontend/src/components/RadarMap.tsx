@@ -327,6 +327,7 @@ export default function RadarMap(p: Props) {
     // au doigt passe par les événements tactiles (gérés par Leaflet) : on ignore alors les gestures pour ne pas
     // zoomer deux fois.
     type SafariGesture = Event & { scale: number; clientX: number; clientY: number };
+    const PINCH_SPEED = 2; // > 1 : un même pincement zoome / dézoome plus fort (1 = suit exactement les doigts)
     const box = el.current;
     let fingers = 0;
     let pinch: { zoom: number; at: L.Point } | null = null;
@@ -344,7 +345,7 @@ export default function RadarMap(p: Props) {
       const g = e as SafariGesture;
       e.preventDefault();
       if (!(g.scale > 0)) return;
-      const z = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), pinch.zoom + Math.log2(g.scale)));
+      const z = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), pinch.zoom + PINCH_SPEED * Math.log2(g.scale)));
       m.setZoomAround(pinch.at, z, { animate: false });
     };
     const onGestureEnd = (e: Event) => {
