@@ -17,6 +17,7 @@ from lib.events import log_event
 from models.schemas import (HistoryEntry, Interaction, PublicProfile, PublicReview, Review, ReviewDecisionIn,
                             ReviewIn)
 from routers.common import avatar_url
+from lib.tracks import is_staff
 
 router = APIRouter(tags=["community"])
 REVIEW_WINDOW = timedelta(hours=24)  # after the end of the flight, while it is still fresh in mind
@@ -163,6 +164,24 @@ async def public_profile(user_id: str, user: dict = Depends(require("flight:read
         can_delete=user.get("role") == "admin" and u["id"] != user["id"] and not acc["creator"]
                    and (not acc["admin"] or access_of(user)["creator"]),
     )
+
+
+@router.get("/users/{user_id}/flights", response_model=list[HistoryEntry])
+async def user_flights(user_id: str, user: dict = Depends(require("flight:read"))):
+    """Flights of one member, for the replay: the member himself, the responsables and the administrators."""
+    if user_id != user["id"] and not is_staff(user):
+        raise HTTPException(403, "Réservé au membre lui-même, aux responsables et aux administrateurs.")
+    docs = await db.flights.find({"pilot_id": user_id}, {"_id": 0, "route": 0, "taxi_out": 0, "taxi_in": 0}) \
+        .sort("created_at", -1).to_list(100)
+    out = []
+    for f in docs:
+        off, on = aware(f.get("block_off_at")), aware(f.get("block_on_at"))
+        out.append(HistoryEntry(id=f["id"], callsign=f["callsign"], pilot_id=f["pilot_id"], pilot_name=f["pilot_name"],
+                                aircraft_type=f["aircraft_type"], departure=f["departure"], arrival=f["arrival"],
+                                phase=f["phase"], departed_at=off, arrived_at=on,
+                                duration_min=int((on - off).total_seconds() // 60) if off and on else None,
+                                created_at=aware(f["created_at"])))
+    return out
 
 
 @router.get("/history", response_model=list[HistoryEntry])

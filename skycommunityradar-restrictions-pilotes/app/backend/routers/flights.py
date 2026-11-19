@@ -9,6 +9,8 @@ from lib.db import db
 from lib.engine import end_vector, fmt_alt, give_vector, next_point_after_vector, nudge_vector, go_around, go_around_possible, hold_lap_s, next_point_after_hold, nudge_in_hold, reconcile_holding, reject_window_open, compute_position, hold_entered_at, start_holding, lined_up_since, marker_nm, move_marker, PUSH_MAX_M, PUSH_MIN_M, push_distance_m, TAXI_PHASES, ACTIONS, ACTIVE, AIR_PHASES, PHASES, taxi_origin, direct_to, taxi_block, enter_phase, rebase, snap_distance, \
     step_for, step_target, track_length, utcnow, aware
 from lib.engine import pilot_move_block, record_pilot_move, pilot_action_block
+from lib.engine import add_backtrack, set_track
+from lib.tracks import can_replay
 from lib.events import log_event
 from lib.geo import haversine_nm
 from lib.osm import on_airport, build_taxi_path, gate_ref, get_graph, get_ground
@@ -205,6 +207,25 @@ async def simbrief_pdf(flight_id: str, user: dict = Depends(require("flight:read
     return {"url": url}
 
 
+@router.get("/{flight_id}/replay")
+async def flight_replay(flight_id: str, user: dict = Depends(require("flight:read"))):
+    """Replay of a flight: its recorded positions (lib/tracks) and its journal, in time order. Reserved to the pilot
+    of the flight, the responsables and the administrators."""
+    f = await load_flight(flight_id)
+    if not can_replay(user, f):
+        raise HTTPException(403, "Le replay d'un vol est réservé à son pilote, aux responsables et aux administrateurs.")
+    samples = [[int(aware(s["t"]).timestamp() * 1000), s["lat"], s["lon"], s.get("alt", 0), s.get("hdg", 0),
+                s.get("phase"), bool(s.get("ground"))]
+               async for s in db.flight_tracks.find({"flight_id": flight_id}, {"_id": 0}).sort("t", 1)]
+    events = [{"at": aware(e["at"]), "type": e["type"], "label": e["label"], "details": e.get("details"),
+               "actor_name": e.get("actor_name"), "actor_role": e.get("actor_role")}
+              async for e in db.events.find({"flight_id": flight_id}, {"_id": 0}).sort("at", 1)]
+    return {"id": f["id"], "callsign": f["callsign"], "pilot_id": f["pilot_id"], "pilot_name": f.get("pilot_name"),
+            "aircraft_type": f.get("aircraft_type"), "departure": f["departure"], "arrival": f["arrival"],
+            "phase": f["phase"], "route": [[w["lat"], w["lon"], w.get("ident")] for w in f.get("route") or []],
+            "samples": samples, "events": events}
+
+
 @router.get("/{flight_id}/events", response_model=list[FlightEvent])
 async def flight_events(flight_id: str, user: dict = Depends(require("flight:read"))):
     await load_flight(flight_id)
@@ -279,12 +300,14 @@ async def do_action(flight_id: str, body: ActionIn, user: dict = Depends(require
         f["progress"]["hold"] = False  # continue le mouvement d'alignement → décollage auto
     else:
         if body.action == "go_around":
-            go_around(f, now)  # from the aircraft's real position (enter_phase would move it to the STAR entry)
+            go_around(f, now, body.circuit)  # from the aircraft's real position (enter_phase would move it to the STAR entry)
             f["phase"], f["takeoff_cleared"] = "approche", False
         else:
             enter_phase(f, to, now)
         if to == "alignement" and body.action != "reprendre":
             await lineup_on_taxiways(f)
+            if body.action == "remonter_piste" and add_backtrack(f):
+                set_track(f, "lineup", 0.0, now)  # the path changed: start it from the holding point
         if cleared_lineup:
             f["takeoff_cleared"] = True
             f["progress"]["hold"] = False
@@ -425,6 +448,30 @@ async def nudge(flight_id: str, body: NudgeIn, user: dict = Depends(require("fli
     total, d = track_length(f, track), p["anchor_dist"]
     before = d
     h = f.get("holding") if track == "air" else None
+    if body.from_index is not None:  # recalage : « l'avion est à X NM avant / après tel point de sa route »
+        route = f["route"]
+        if track != "air":
+            raise HTTPException(409, "Le recalage sur un point se fait en vol, sur la route (pas au roulage).")
+        if f["phase"] == "decollage":
+            raise HTTPException(409, "Pendant le décollage, avancez l'avion par petits pas.")
+        if f.get("vector"):
+            raise HTTPException(409, "En vecteurs : faites d'abord reprendre la route à l'avion (direct vers un point).")
+        if h and hold_entered_at(f, now):
+            raise HTTPException(409, "Dans le hold : faites d'abord sortir l'avion du hold.")
+        if not 0 <= body.from_index < len(route):
+            raise HTTPException(422, "Point inconnu sur la route de ce vol.")
+        w, off = route[body.from_index], float(body.from_nm or 0.0)
+        d = max(0.0, min(total, float(w["cum_nm"]) + off))
+        if h:  # en route vers le hold : jamais au-delà de son point
+            d = min(d, h["fix_nm"])
+        p["anchor_dist"] = d
+        f["manual_position"] = None
+        f["last_wp_index"] = compute_position(f, now)["wp_index"]
+        await save(f, body.version)
+        where = f"sur {w['ident']}" if abs(off) < 0.05 else f"{abs(off):g} NM {'après' if off > 0 else 'avant'} {w['ident']}"
+        await log_event("position", "Position recalée sur un point de la route", user, f,
+                        f"{where} ({d:.1f} / {total:.1f} NM)")
+        return detail(f, user, now, ctx)
     if track == "air" and f.get("vector"):  # en vecteurs : le long du cap ; ⏭ = reprendre la route (direct)
         if body.waypoint == "prev":
             raise HTTPException(409, "En vecteurs, l'avion avance ou recule le long de son cap (pas de point précédent).")
@@ -665,12 +712,12 @@ async def navigation(flight_id: str, body: NavIn, user: dict = Depends(require("
         if h:
             raise HTTPException(409, f"Le vol est déjà en hold sur {h['ident']} : faites-le d'abord sortir.")
         try:
-            hp = start_holding(f, body.waypoint_index, body.turns, now, user["display_name"])
+            hp = start_holding(f, body.waypoint_index, body.turns, now, user["display_name"], body.turn)
         except ValueError as e:
             raise HTTPException(422, str(e))
         label = f"Hold demandé sur {hp['ident']}"
         details = (f"{body.turns} tour(s)" if body.turns else "jusqu'à nouvel ordre") + \
-            f" — hippodrome, virages à droite, axe {hp['inbound']:.0f}°, branches de {hp['leg_s'] / 60:g} min"
+            f" — hippodrome, virages à {'gauche' if hp['turn'] == 'left' else 'droite'}, axe {hp['inbound']:.0f}°, branches de {hp['leg_s'] / 60:g} min"
     else:
         if not h:
             raise HTTPException(409, "Aucun hold en cours.")
