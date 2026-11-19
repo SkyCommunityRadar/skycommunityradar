@@ -39,7 +39,8 @@ if (glProto && !glProto.__guarded) {
   };
 }
 import { PHASE_COLORS, PHASE_LABELS } from "@/lib/phases";
-import { MAP_STYLE } from "@/lib/mapStyle";
+import { MAP_STYLE, applyMapTheme } from "@/lib/mapStyle";
+import { useThemeId } from "@/components/ThemeDecor";
 import type { AirspaceFeature, AtcPosition, FlightSummary, Ground, GroundLine, Holding, Waypoint } from "@/lib/types";
 
 import { labels, tr } from "@/lib/i18n";
@@ -85,6 +86,8 @@ interface Props {
   pushHint?: { lat: number; lon: number; hdg: number; label?: string } | null;
   /** keep the map centred on this point (follow mode) without changing the zoom */
   followPos?: [number, number];
+  /** false: follow without the 1 s pan animation (replay: the position changes many times per second) */
+  followAnimate?: boolean;
   /** the user dragged the map by hand (used to stop following the aircraft) */
   onUserPan?: () => void;
   firs?: AirspaceFeature[];
@@ -93,6 +96,9 @@ interface Props {
   showGround?: boolean;
   onViewChange?: (v: MapView) => void;
   testId?: string;
+  /** replay: recorded track of the flight — flown part (bright) and the rest (dimmed) */
+  trail?: number[][];
+  trailAhead?: number[][];
 }
 
 /** Every dynamic string inserted into Leaflet HTML (divIcon / tooltips use innerHTML) goes through this. */
@@ -241,6 +247,15 @@ export default function RadarMap(p: Props) {
   const cb = useRef(p);
   cb.current = p;
   const [baseError, setBaseError] = useState<string | null>(null);
+  // seasonal theme: the base map takes the colours of the site theme (aircraft, routes, runways unchanged)
+  const theme = useThemeId();
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  const glRef = useRef<Parameters<typeof applyMapTheme>[0] | null>(null);
+  useEffect(() => {
+    const gl = glRef.current;
+    if (gl && gl.isStyleLoaded()) applyMapTheme(gl, theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!el.current || map.current) return;
@@ -280,11 +295,15 @@ export default function RadarMap(p: Props) {
         errors += 1;
         if (errors >= 6) showFallback(tr("Fond de carte vectoriel indisponible ({0}). Fond de secours affiché.", [e.error?.status ?? e.error?.message ?? tr("réseau")]));
       });
-      glMap.on("load", () => setBaseError(null));
+      glMap.on("load", () => {
+        setBaseError(null);
+        applyMapTheme(glMap, themeRef.current);
+      });
+      glRef.current = glMap;
     } catch {
       showFallback(tr("Votre navigateur ne peut pas afficher le fond vectoriel (WebGL désactivé). Fond de secours affiché."));
     }
-    for (const k of ["airspace", "atc", "airports", "graph", "route", "taxi", "vectors", "flights"]) layers.current[k] = L.layerGroup().addTo(m);
+    for (const k of ["airspace", "atc", "airports", "graph", "route", "taxi", "vectors", "trail", "flights"]) layers.current[k] = L.layerGroup().addTo(m);
     const syncGraph = () => {
       const z = m.getZoom();
       el.current?.classList.toggle("map-far", z < 6); // labels hidden when zoomed far out (too many aircraft)
@@ -378,6 +397,7 @@ export default function RadarMap(p: Props) {
       }
       m.remove();
       map.current = null;
+      glRef.current = null;
       mk.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -390,7 +410,7 @@ export default function RadarMap(p: Props) {
 
   useEffect(() => {
     const fp = p.followPos;
-    if (map.current && fp) map.current.panTo(fp, { animate: true, duration: 1 });
+    if (map.current && fp) map.current.panTo(fp, p.followAnimate === false ? { animate: false } : { animate: true, duration: 1 });
   }, [p.followPos?.[0], p.followPos?.[1]]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -678,6 +698,26 @@ export default function RadarMap(p: Props) {
     };
   }, [p.pushHint?.lat, p.pushHint?.lon, p.pushHint?.hdg, p.pushHint?.label]);
 
+
+  // replay: recorded track. Two polylines kept and updated in place (the replay moves many times per second)
+  const trailLines = useRef<{ ahead?: L.Polyline; flown?: L.Polyline }>({});
+  useEffect(() => {
+    const g = layers.current.trail;
+    if (!g || !map.current) return;
+    const t = trailLines.current;
+    const set = (key: "ahead" | "flown", pts: number[][] | undefined, style: L.PolylineOptions) => {
+      const ll = (pts ?? []).map((q) => [q[0], q[1]] as [number, number]);
+      if (ll.length < 2) {
+        if (t[key]) { if (g.hasLayer(t[key]!)) g.removeLayer(t[key]!); t[key] = undefined; }
+        return;
+      }
+      // reuse the line only if it is still on THIS map (the map is rebuilt when the component is mounted again)
+      if (t[key] && g.hasLayer(t[key]!)) t[key]!.setLatLngs(ll);
+      else t[key] = L.polyline(ll, { ...style, interactive: false }).addTo(g);
+    };
+    set("ahead", p.trailAhead, { color: "#64748B", weight: 1.6, opacity: 0.7, dashArray: "4 6" });
+    set("flown", p.trail, { color: "#38BDF8", weight: 2.6, opacity: 0.95 });
+  }, [p.trail, p.trailAhead]);
 
   // aircraft markers (kept by id so they glide instead of teleporting; never touches the base map)
   useEffect(() => {

@@ -504,7 +504,6 @@ function TopBar({ user, mode }: { user: User | undefined; mode: UiMode }) {
         {user && <NotifBell user={user} />}
         <LogoutButton />
       </div>
-      <ThemeGarland className="absolute inset-x-0 top-full z-50 h-[36px]" />
     </header>
   );
 }
@@ -706,6 +705,8 @@ export default function AppShell({ children }: { children: (user: User, mode: Ui
     <div className="flex h-dvh flex-col overflow-hidden">
       <TopBar user={me.data} mode={mode} />
       {me.data && mode === "atc" && ["atc", "admin", "instructeur"].includes(me.data.role) && <AtisBanner />}{/* ATIS des aéroports contrôlés */}
+      {/* seasonal garland: its own thin strip under the top bar and the ATIS, never drawn over information */}
+      <ThemeGarland className="h-[18px] shrink-0" />
       <div className="flex min-h-0 flex-1">
         {me.data && <Sidebar user={me.data} mode={mode} />}
         <motion.main key={loc.pathname} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }} className="isolate min-h-0 min-w-0 flex-1 overflow-y-auto">{/* isolate: nothing on a page (map search, banners) can cover the top bar and its menus */}
