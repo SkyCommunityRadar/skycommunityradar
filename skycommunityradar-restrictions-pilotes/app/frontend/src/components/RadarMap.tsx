@@ -322,7 +322,51 @@ export default function RadarMap(p: Props) {
     const mk = markers.current;
     const ro = new ResizeObserver(() => m.invalidateSize());
     ro.observe(el.current);
+    // Safari sur Mac : le pincement du trackpad envoie des « gesture events », que main.tsx bloque pour que la page
+    // ne zoome pas. Leaflet ne les gère pas : on zoome donc la carte nous-mêmes. Sur iPhone / iPad, le pincement
+    // au doigt passe par les événements tactiles (gérés par Leaflet) : on ignore alors les gestures pour ne pas
+    // zoomer deux fois.
+    type SafariGesture = Event & { scale: number; clientX: number; clientY: number };
+    const box = el.current;
+    let fingers = 0;
+    let pinch: { zoom: number; at: L.Point } | null = null;
+    const onTouch = (e: TouchEvent) => { fingers = e.touches.length; };
+    const onGestureStart = (e: Event) => {
+      if (fingers > 0) return;
+      const g = e as SafariGesture;
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      pinch = { zoom: m.getZoom(), at: L.point(g.clientX - r.left, g.clientY - r.top) };
+      m.stop();
+    };
+    const onGestureChange = (e: Event) => {
+      if (!pinch) return;
+      const g = e as SafariGesture;
+      e.preventDefault();
+      if (!(g.scale > 0)) return;
+      const z = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), pinch.zoom + Math.log2(g.scale)));
+      m.setZoomAround(pinch.at, z, { animate: false });
+    };
+    const onGestureEnd = (e: Event) => {
+      if (!pinch) return;
+      e.preventDefault();
+      pinch = null;
+    };
+    // Si Safari envoie aussi des molettes « ctrl » pendant le pincement, Leaflet zoomerait une deuxième fois.
+    const onWheelDuringPinch = (e: WheelEvent) => {
+      if (pinch && e.ctrlKey) { e.preventDefault(); e.stopImmediatePropagation(); }
+    };
+    for (const t of ["touchstart", "touchend", "touchcancel"] as const) box.addEventListener(t, onTouch, { passive: true });
+    box.addEventListener("gesturestart", onGestureStart);
+    box.addEventListener("gesturechange", onGestureChange);
+    box.addEventListener("gestureend", onGestureEnd);
+    box.addEventListener("wheel", onWheelDuringPinch, { capture: true, passive: false });
     return () => {
+      for (const t of ["touchstart", "touchend", "touchcancel"] as const) box.removeEventListener(t, onTouch);
+      box.removeEventListener("gesturestart", onGestureStart);
+      box.removeEventListener("gesturechange", onGestureChange);
+      box.removeEventListener("gestureend", onGestureEnd);
+      box.removeEventListener("wheel", onWheelDuringPinch, { capture: true });
       ro.disconnect();
       // detach the WebGL layer first: removing the map with it attached lets a pending frame read a null map
       try {
