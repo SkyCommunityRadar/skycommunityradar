@@ -23,12 +23,18 @@ REVIEW_WINDOW = timedelta(hours=24)  # after the end of the flight, while it is 
 CLOSED = ["termine", "annule"]
 
 
-async def _controllers_of(flight_id: str) -> dict[str, str]:
-    """Controllers who really acted on the flight (journal entries written in ATC role)."""
+async def _controllers_of(f: dict) -> dict[str, str]:
+    """Controllers of the flight: those who acted on it (journal entries written in ATC role) AND those who were
+    responsible for it at some point (f["controllers"], recorded by the engine tick) — e.g. the approach / tower at
+    the arrival, who often control without clicking anything on the site."""
     out: dict[str, str] = {}
-    async for e in db.events.find({"flight_id": flight_id, "actor_role": "atc", "actor_id": {"$ne": None}},
+    async for e in db.events.find({"flight_id": f["id"], "actor_role": "atc", "actor_id": {"$ne": None}},
                                   {"_id": 0, "actor_id": 1, "actor_name": 1}):
         out[e["actor_id"]] = e["actor_name"]
+    missing = [c for c in (f.get("controllers") or []) if c not in out]
+    if missing:
+        async for u in db.users.find({"id": {"$in": missing}}, {"_id": 0, "id": 1, "display_name": 1}):
+            out[u["id"]] = u["display_name"]
     return out
 
 
@@ -39,16 +45,16 @@ async def _interactions(user: dict) -> list[Interaction]:
     out: list[Interaction] = []
     # as a pilot: every controller who acted on my finished flights
     async for f in db.flights.find({"pilot_id": user["id"], "phase": "termine", "updated_at": {"$gte": since}}, {"_id": 0}):
-        for cid, cname in (await _controllers_of(f["id"])).items():
+        for cid, cname in (await _controllers_of(f)).items():
             if cid != user["id"]:
                 out.append(Interaction(flight_id=f["id"], callsign=f["callsign"], departure=f["departure"],
                                        arrival=f["arrival"], target_id=cid, target_name=cname, target_role="atc",
                                        at=aware(f["updated_at"])))
-    # as a controller: pilots of the finished flights I acted on
+    # as a controller: pilots of the finished flights I acted on, or was responsible for (arrival included)
     ids = await db.events.distinct("flight_id", {"actor_id": user["id"], "actor_role": "atc",
                                                  "at": {"$gte": since - timedelta(days=2)}})  # long flights included
-    async for f in db.flights.find({"id": {"$in": [i for i in ids if i]}, "phase": "termine", "updated_at": {"$gte": since}},
-                                   {"_id": 0}):
+    async for f in db.flights.find({"$or": [{"id": {"$in": [i for i in ids if i]}}, {"controllers": user["id"]}],
+                                    "phase": "termine", "updated_at": {"$gte": since}}, {"_id": 0}):
         if f["pilot_id"] != user["id"]:
             out.append(Interaction(flight_id=f["id"], callsign=f["callsign"], departure=f["departure"],
                                    arrival=f["arrival"], target_id=f["pilot_id"], target_name=f["pilot_name"],
